@@ -1,0 +1,61 @@
+{
+  "data": {
+    "jobBoard": {
+      "jobPostings": [
+        {
+          "id": "ashby-job-id-001",
+          "title": "Senior Software Engineer",
+          "location": {
+            "name": "San Francisco, CA"
+          },
+          "description": "<p>We're looking for a talented senior software engineer to join our growing team.</p><p>Responsibilities:</p><ul><li>Design and implement scalable systems</li><li>Mentor junior engineers</li></ul>",
+          "externalLink": "https://jobs.ashby.com/examplecorp/ashby-job-id-001",
+          "publishedDate": "2025-11-01T12:00:00.000Z",
+          "updatedAt": "2025-11-04T10:30:00.000Z"
+        },
+        {
+          "id": "ashby-job-id-002",
+          "title": "Product Manager",
+          "location": {
+            "name": "New York, NY"
+          },
+          "description": "<p>Lead our product strategy and roadmap.</p><p>You will work with engineering and design teams to ship amazing products.</p>",
+          "externalLink": "https://jobs.ashby.com/examplecorp/ashby-job-id-002",
+          "publishedDate": "2025-10-31T08:15:00.000Z",
+          "updatedAt": "2025-11-03T14:15:00.000Z"
+        },
+        {
+          "id": "ashby-job-id-003",
+          "title": "Frontend Engineer",
+          "location": {
+            "name": "Remote"
+          },
+          "description": "<p>Build beautiful and performant user interfaces.</p><p>We use React and TypeScript in our frontend stack.</p>",
+          "externalLink": "https://jobs.ashby.com/examplecorp/ashby-job-id-003",
+          "publishedDate": "2025-10-30T16:45:00.000Z",
+          "updatedAt": "2025-11-02T09:45:00.000Z"
+        },
+        {
+          "id": "ashby-job-id-004",
+          "title": "DevOps Engineer",
+          "location": null,
+          "description": "<p>Manage our cloud infrastructure and CI/CD pipelines.</p><p>Experience with Kubernetes and AWS required.</p>",
+          "externalLink": "https://jobs.ashby.com/examplecorp/ashby-job-id-004",
+          "publishedDate": "2025-10-29T11:20:00.000Z",
+          "updatedAt": "2025-11-01T16:20:00.000Z"
+        },
+        {
+          "id": "ashby-job-id-005",
+          "title": "Data Scientist",
+          "location": {
+            "name": "Boston, MA"
+          },
+          "description": "<p>Apply machine learning to solve real-world problems.</p><p>Strong Python and SQL skills required.</p>",
+          "externalLink": "https://jobs.ashby.com/examplecorp/ashby-job-id-005",
+          "publishedDate": "2025-10-28T14:30:00.000Z",
+          "updatedAt": "2025-10-31T11:00:00.000Z"
+        }
+      ]
+    }
+  }
+}

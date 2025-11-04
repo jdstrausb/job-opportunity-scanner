@@ -1,0 +1,52 @@
+{
+  "jobs": [
+    {
+      "id": 123456,
+      "title": "Senior Software Engineer",
+      "location": {
+        "name": "San Francisco, CA"
+      },
+      "content": "<p>We're looking for a talented senior software engineer to join our growing team.</p><p>Responsibilities:</p><ul><li>Design and implement scalable systems</li><li>Mentor junior engineers</li></ul>",
+      "absolute_url": "https://boards.greenhouse.io/examplecorp/jobs/123456",
+      "updated_at": "2025-11-04T10:30:00Z"
+    },
+    {
+      "id": 123457,
+      "title": "Product Manager",
+      "location": {
+        "name": "New York, NY"
+      },
+      "content": "<p>Lead our product strategy and roadmap.</p><p>You will work with engineering and design teams to ship amazing products.</p>",
+      "absolute_url": "https://boards.greenhouse.io/examplecorp/jobs/123457",
+      "updated_at": "2025-11-03T14:15:00Z"
+    },
+    {
+      "id": 123458,
+      "title": "Frontend Engineer",
+      "location": {
+        "name": "Remote"
+      },
+      "content": "<p>Build beautiful and performant user interfaces.</p><p>We use React and TypeScript in our frontend stack.</p>",
+      "absolute_url": "https://boards.greenhouse.io/examplecorp/jobs/123458",
+      "updated_at": "2025-11-02T09:45:00Z"
+    },
+    {
+      "id": 123459,
+      "title": "DevOps Engineer",
+      "location": null,
+      "content": "<p>Manage our cloud infrastructure and CI/CD pipelines.</p><p>Experience with Kubernetes and AWS required.</p>",
+      "absolute_url": "https://boards.greenhouse.io/examplecorp/jobs/123459",
+      "updated_at": "2025-11-01T16:20:00Z"
+    },
+    {
+      "id": 123460,
+      "title": "Data Scientist",
+      "location": {
+        "name": "Boston, MA"
+      },
+      "content": "<p>Apply machine learning to solve real-world problems.</p><p>Strong Python and SQL skills required.</p>",
+      "absolute_url": "https://boards.greenhouse.io/examplecorp/jobs/123460",
+      "updated_at": "2025-10-31T11:00:00Z"
+    }
+  ]
+}

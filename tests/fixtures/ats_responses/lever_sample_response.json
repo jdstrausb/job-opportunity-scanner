@@ -1,0 +1,91 @@
+[
+  {
+    "id": "8c8c8c8c-8c8c-8c8c-8c8c-8c8c8c8c8c8c",
+    "text": "Senior Software Engineer",
+    "categories": {
+      "location": "San Francisco, CA",
+      "commitment": "Full-time",
+      "team": "Engineering"
+    },
+    "description": "<p>We're looking for a talented senior software engineer to join our growing team.</p>",
+    "descriptionPlain": "We're looking for a talented senior software engineer to join our growing team.",
+    "lists": [],
+    "additional": "<p>Responsibilities:</p><ul><li>Design and implement scalable systems</li><li>Mentor junior engineers</li></ul>",
+    "additionalPlain": "Responsibilities:\n- Design and implement scalable systems\n- Mentor junior engineers",
+    "hostedUrl": "https://jobs.lever.co/examplecorp/8c8c8c8c-8c8c-8c8c-8c8c-8c8c8c8c8c8c",
+    "applyUrl": "https://jobs.lever.co/examplecorp/8c8c8c8c-8c8c-8c8c-8c8c-8c8c8c8c8c8c/apply",
+    "createdAt": 1698854400000,
+    "updatedAt": 1699459200000
+  },
+  {
+    "id": "7d7d7d7d-7d7d-7d7d-7d7d-7d7d7d7d7d7d",
+    "text": "Product Manager",
+    "categories": {
+      "location": "New York, NY",
+      "commitment": "Full-time",
+      "team": "Product"
+    },
+    "description": "<p>Lead our product strategy and roadmap.</p>",
+    "descriptionPlain": "Lead our product strategy and roadmap.",
+    "lists": [],
+    "additional": "<p>You will work with engineering and design teams to ship amazing products.</p>",
+    "additionalPlain": "You will work with engineering and design teams to ship amazing products.",
+    "hostedUrl": "https://jobs.lever.co/examplecorp/7d7d7d7d-7d7d-7d7d-7d7d-7d7d7d7d7d7d",
+    "applyUrl": "https://jobs.lever.co/examplecorp/7d7d7d7d-7d7d-7d7d-7d7d-7d7d7d7d7d7d/apply",
+    "createdAt": 1698768000000,
+    "updatedAt": 1699372800000
+  },
+  {
+    "id": "6e6e6e6e-6e6e-6e6e-6e6e-6e6e6e6e6e6e",
+    "text": "Frontend Engineer",
+    "categories": {
+      "location": "Remote",
+      "commitment": "Full-time",
+      "team": "Engineering"
+    },
+    "description": "<p>Build beautiful and performant user interfaces.</p>",
+    "descriptionPlain": "Build beautiful and performant user interfaces.",
+    "lists": [],
+    "additional": "<p>We use React and TypeScript in our frontend stack.</p>",
+    "additionalPlain": "We use React and TypeScript in our frontend stack.",
+    "hostedUrl": "https://jobs.lever.co/examplecorp/6e6e6e6e-6e6e-6e6e-6e6e-6e6e6e6e6e6e",
+    "applyUrl": "https://jobs.lever.co/examplecorp/6e6e6e6e-6e6e-6e6e-6e6e-6e6e6e6e6e6e/apply",
+    "createdAt": 1698681600000,
+    "updatedAt": 1699286400000
+  },
+  {
+    "id": "5f5f5f5f-5f5f-5f5f-5f5f-5f5f5f5f5f5f",
+    "text": "DevOps Engineer",
+    "categories": {
+      "commitment": "Full-time",
+      "team": "Infrastructure"
+    },
+    "description": "<p>Manage our cloud infrastructure and CI/CD pipelines.</p>",
+    "descriptionPlain": "Manage our cloud infrastructure and CI/CD pipelines.",
+    "lists": [],
+    "additional": "<p>Experience with Kubernetes and AWS required.</p>",
+    "additionalPlain": "Experience with Kubernetes and AWS required.",
+    "hostedUrl": "https://jobs.lever.co/examplecorp/5f5f5f5f-5f5f-5f5f-5f5f-5f5f5f5f5f5f",
+    "applyUrl": "https://jobs.lever.co/examplecorp/5f5f5f5f-5f5f-5f5f-5f5f-5f5f5f5f5f5f/apply",
+    "createdAt": 1698595200000,
+    "updatedAt": 1699200000000
+  },
+  {
+    "id": "4e4e4e4e-4e4e-4e4e-4e4e-4e4e4e4e4e4e",
+    "text": "Data Scientist",
+    "categories": {
+      "location": "Boston, MA",
+      "commitment": "Full-time",
+      "team": "Data"
+    },
+    "description": "<p>Apply machine learning to solve real-world problems.</p>",
+    "descriptionPlain": "Apply machine learning to solve real-world problems.",
+    "lists": [],
+    "additional": "<p>Strong Python and SQL skills required.</p>",
+    "additionalPlain": "Strong Python and SQL skills required.",
+    "hostedUrl": "https://jobs.lever.co/examplecorp/4e4e4e4e-4e4e-4e4e-4e4e-4e4e4e4e4e4e",
+    "applyUrl": "https://jobs.lever.co/examplecorp/4e4e4e4e-4e4e-4e4e-4e4e-4e4e4e4e4e4e/apply",
+    "createdAt": 1698508800000,
+    "updatedAt": 1699113600000
+  }
+]
