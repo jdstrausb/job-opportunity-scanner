@@ -1,0 +1,108 @@
+## Product Requirements Document: Job Opportunity Scanner (v1.0)
+
+### 1. Introduction & Problem Statement
+
+As a job seeker in a competitive market, the speed of application is a critical advantage. Job openings are often posted on a company's own career page (powered by an Applicant Tracking System like Greenhouse) hours or even days before they are syndicated to larger job boards like LinkedIn.
+
+This project aims to create an automated tool that directly monitors the career pages of target companies, identifies new and relevant job postings based on personalized criteria, and delivers immediate notifications. The goal is to gain a first-mover advantage in the application process.
+
+### 2. Goals & Objectives
+
+*   **Primary Goal:** To identify and be alerted to new, relevant job postings from a target list of companies as quickly as possible.
+*   **Key Objectives (v1.0):**
+    *   Monitor multiple company career pages via their public ATS APIs.
+    *   Filter job postings based on user-defined criteria (keywords, location, etc.).
+    *   Deliver timely, actionable notifications for matching jobs.
+    *   Avoid duplicate alerts for the same job posting.
+    *   Prioritize a reliable, API-first approach over web scraping.
+
+### 3. Functional Requirements
+
+#### 3.1. Source Configuration
+The user must be able to specify which companies to monitor.
+
+*   **FR 3.1.1: Configuration File:** The system will be configured via a single, user-editable YAML file (e.g., `config.yaml`).
+*   **FR 3.1.2: Supported ATS:** The system must initially support adapters for:
+    *   Greenhouse (via `board_token`)
+    *   Lever (via company handle)
+    *   Ashby (via organization identifier)
+*   **FR 3.1.3: Source Specification:** For each company, the user must provide a `name`, `type` (e.g., `greenhouse`), and `identifier` (e.g., the board token).
+*   **FR 3.1.4: Scan Interval:** The system will have a global, configurable scan interval (e.g., every 15 minutes).
+
+#### 3.2. Search Criteria & Filtering
+The user must be able to define what constitutes a "relevant" job using a combination of logical rules.
+
+*   **FR 3.2.1: Centralized Criteria:** A single, global set of search criteria will be defined in the `config.yaml` file.
+*   **FR 3.2.2: Structured Keyword Logic:** The system must support filtering based on a combination of required terms and keyword groups. The logic will be structured to enforce:
+    *   **Required Terms (AND):** A list of keywords that *must all* be present in the job title or description (e.g., "full-time").
+    *   **Keyword Groups (OR within group, AND between groups):** A list of keyword groups. To match, a job posting must contain *at least one keyword from each group*. This allows for complex logic like `(javascript OR python) AND (backend OR frontend)`.
+*   **FR 3.2.3: Deny List:** The system must support an "exclude terms" or "deny list" to immediately disqualify a job if any of these terms are present.
+
+*Example `config.yaml` structure for search criteria:*
+```yaml
+search_criteria:
+  # All keywords in this list MUST be present (AND logic)
+  required_terms:
+    - "full-time"
+
+  # The job must match at least ONE keyword from EACH group below
+  keyword_groups:
+    - ["health benefits", "401k", "benefits"] # Must contain one of these
+    - ["javascript", "python", "ruby on rails", "sql", "postgresql", "database"] # And one of these
+    - ["web development", "full-stack", "backend", "frontend"] # And one of these
+
+  # If any of these keywords are present, the job is excluded
+  exclude_terms:
+    - "intern"
+    - "junior"
+    - "principal"
+```
+
+#### 3.3. Job Polling & Data Processing
+The core logic for fetching and processing job data.
+
+*   **FR 3.3.1: Scheduled Execution:** A scheduler will trigger the scanning process for all configured sources at the specified interval.
+*   **FR 3.3.2: Data Fetching:** The system will make API calls to the appropriate public endpoints for each configured source.
+*   **FR 3.3.3: Data Normalization:** Data from different ATS adapters will be normalized into a standard internal `Job` structure.
+*   **FR 3.3.4: Resilient Error Handling:** If fetching data from one source fails (e.g., due to a network error or the company's site being down), the system **must log the error and continue** to process the other configured sources. The failure of one source should not halt the entire scan.
+
+
+#### 3.4. Change Detection & Deduplication
+The system must intelligently identify what is new or changed to avoid spam.
+
+*   **FR 3.4.1: Unique Job Identifier:** Each job posting will be assigned a unique internal key, generated from a hash of the source identifier and the job's external ID (e.g., `sha256(greenhouse:exampleco + 12345)`).
+*   **FR 3.4.2: New vs. Updated:** The system must differentiate between:
+    *   **New Jobs:** A job key that has not been seen before.
+    *   **Updated Jobs:** A job key that has been seen, but its `updated_at` timestamp provided by the API is more recent than the one stored.
+*   **FR 3.4.3: State Persistence:** All seen jobs, their key attributes, and timestamps (`first_seen_at`, `last_seen_at`) will be persisted in a database.
+
+#### 3.5. Ranking & Notification Logic
+The system must decide if a new or updated job is worth sending an alert for.
+
+*   **FR 3.5.1: Match-Based Trigger:** An alert is triggered if a new or updated job successfully passes all the rules defined in the `search_criteria` (required terms, keyword groups, and exclusion list). A scoring system is not required for v1.1; it is a boolean pass/fail.
+*   **FR 3.5.2: One Alert Per Job:** The system must track sent alerts to ensure only one notification is ever sent for a specific job version.
+
+#### 3.6. Notifications
+The system must deliver alerts to the user.
+
+*   **FR 3.6.1: Primary Notification Channel (Email):** The primary and required notification channel for v1.1 is **Email**. Support for Slack is a secondary goal.
+*   **FR 3.6.2: Notification Content:** Alerts must be informative, containing the Job Title, Company, Location, a direct URL to the posting, and a summary of **why it matched** (e.g., "Matched keywords: full-time, python, backend").
+*   **FR 3.6.3: Secure Configuration:** Notification provider details (SMTP server, username, password) and the recipient email address (`jstrausb86@gmail.com`) must be configured via environment variables (e.g., `SMTP_USER`, `SMTP_PASS`, `ALERT_TO_EMAIL`).
+
+### 4. Non-Functional Requirements
+
+*   **NFR 4.1: Persistence:** The system will use **SQLite** for its database. This is to ensure easy setup and low operational overhead. The database file will store `jobs`, `sources`, and `alerts_sent`.
+*   **NFR 4.2: Deployment:** The application must be packaged as a single **Docker image**. The recommended deployment strategy for 24/7, low-cost operation is to run this container on a small VPS (e.g., DigitalOcean, Linode) with the SQLite database file mounted as a volume for persistence.
+    *   *Note: Serverless options like AWS Lambda or GitHub Actions can be explored in future versions for potentially lower costs, but they introduce state-management complexity that is out of scope for v1.1.*
+*   **NFR 4.3: Security:** All secrets (API keys, passwords, etc.) must be managed via environment variables.
+*   **NFR 4.4: Observability:** The system must produce structured logs to standard output. These logs are the **primary mechanism** for diagnosing issues, such as source scan failures. Per your requirement, the tool will fail silently to the user, making robust logging essential for maintenance.
+*   **NFR 4.5: Compliance:** (Unchanged from previous version)
+
+
+### 5. Out of Scope for v1.0 (Future Considerations)
+
+*   **UI-based Configuration:** All configuration will be done via the YAML file and environment variables.
+*   **Advanced Matching:** Semantic or vector-based matching.
+*   **Additional Notifiers:** SMS, RSS feeds, etc.
+*   **Failure Notifications:** The system will not send alerts about its own operational failures.
+*   **Multiple Search Profiles:** The system will operate with a single, global search profile.

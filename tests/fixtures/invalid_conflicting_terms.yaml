@@ -1,0 +1,13 @@
+# Invalid: term appears in both required and excluded
+sources:
+  - name: "Test Company"
+    type: "greenhouse"
+    identifier: "testco"
+
+search_criteria:
+  required_terms:
+    - "python"
+    - "remote"  # Also in exclude_terms - conflict!
+  exclude_terms:
+    - "remote"
+    - "django"

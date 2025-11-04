@@ -1,0 +1,9 @@
+# Invalid: unsupported ATS type
+sources:
+  - name: "Test Company"
+    type: "workday"  # Invalid ATS type
+    identifier: "testco"
+
+search_criteria:
+  required_terms:
+    - "python"

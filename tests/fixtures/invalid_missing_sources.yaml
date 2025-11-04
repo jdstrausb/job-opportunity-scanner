@@ -1,0 +1,4 @@
+# Invalid: missing sources field
+search_criteria:
+  required_terms:
+    - "python"

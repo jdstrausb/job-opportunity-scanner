@@ -1,0 +1,39 @@
+# Valid configuration for testing
+sources:
+  - name: "Test Company A"
+    type: "greenhouse"
+    identifier: "testcompanya"
+    enabled: true
+
+  - name: "Test Company B"
+    type: "lever"
+    identifier: "testcompanyb"
+    enabled: true
+
+scan_interval: "15m"
+
+search_criteria:
+  required_terms:
+    - "python"
+    - "backend"
+  keyword_groups:
+    - ["remote", "work-from-home"]
+    - ["senior", "staff", "principal"]
+  exclude_terms:
+    - "django"
+    - "legacy"
+
+email:
+  use_tls: true
+  max_retries: 3
+  retry_backoff_multiplier: 2.0
+  retry_initial_delay: 5
+
+logging:
+  level: "INFO"
+  format: "key-value"
+
+advanced:
+  http_request_timeout: 30
+  user_agent: "JobOpportunityScanner/1.0"
+  max_jobs_per_source: 1000

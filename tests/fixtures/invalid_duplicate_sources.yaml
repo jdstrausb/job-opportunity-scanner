@@ -1,0 +1,13 @@
+# Invalid: duplicate sources (same type + identifier)
+sources:
+  - name: "Test Company A"
+    type: "greenhouse"
+    identifier: "testco"
+
+  - name: "Test Company B (duplicate)"
+    type: "greenhouse"
+    identifier: "testco"  # Duplicate!
+
+search_criteria:
+  required_terms:
+    - "python"

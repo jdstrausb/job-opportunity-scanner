@@ -1,0 +1,11 @@
+# Valid config using ISO-8601 duration format
+sources:
+  - name: "Test Company"
+    type: "greenhouse"
+    identifier: "testco"
+
+scan_interval: "PT15M"  # ISO-8601 format for 15 minutes
+
+search_criteria:
+  required_terms:
+    - "python"

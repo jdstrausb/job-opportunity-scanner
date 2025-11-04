@@ -1,0 +1,10 @@
+# Invalid: empty search criteria
+sources:
+  - name: "Test Company"
+    type: "greenhouse"
+    identifier: "testco"
+
+search_criteria:
+  required_terms: []
+  keyword_groups: []
+  exclude_terms: []

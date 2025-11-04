@@ -1,0 +1,9 @@
+# Minimal valid configuration with only required fields
+sources:
+  - name: "Minimal Test Company"
+    type: "greenhouse"
+    identifier: "minimaltest"
+
+search_criteria:
+  required_terms:
+    - "python"

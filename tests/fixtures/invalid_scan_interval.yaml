@@ -1,0 +1,11 @@
+# Invalid: scan interval too short (less than 5 minutes)
+sources:
+  - name: "Test Company"
+    type: "greenhouse"
+    identifier: "testco"
+
+scan_interval: "2m"  # Too short! Minimum is 5 minutes
+
+search_criteria:
+  required_terms:
+    - "python"
