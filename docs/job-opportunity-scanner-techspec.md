@@ -172,4 +172,3 @@
 - Do we need to redact job descriptions in logs to avoid PII storage?
 - How aggressive should retry/backoff be for adapters and SMTP (default counts, intervals)?
 - Any requirements for multi-user configuration support in future iterations?
-
