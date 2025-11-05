@@ -15,6 +15,7 @@ import requests
 
 from app.config.models import SourceConfig
 from app.domain.models import RawJob
+from app.logging import get_logger
 
 from .exceptions import (
     AdapterConfigurationError,
@@ -24,7 +25,7 @@ from .exceptions import (
     AdapterTimeoutError,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, component="adapter")
 
 
 class BaseAdapter(ABC):
@@ -132,8 +133,9 @@ class BaseAdapter(ABC):
 
         try:
             logger.debug(
-                "HTTP request",
+                f"HTTP {method} request to {url}",
                 extra={
+                    "event": "adapter.fetch.request",
                     "method": method,
                     "url": url,
                     "timeout": self.timeout,
@@ -151,6 +153,22 @@ class BaseAdapter(ABC):
 
             # Check for HTTP errors
             if response.status_code >= 400:
+                # Determine if this is a retryable error (5xx) or fatal (4xx)
+                is_retryable = response.status_code >= 500
+                event_name = "adapter.fetch.retryable_error" if is_retryable else "adapter.fetch.error"
+                log_level = logging.WARNING if is_retryable else logging.ERROR
+
+                logger.log(
+                    log_level,
+                    f"HTTP {response.status_code} error from {url}",
+                    extra={
+                        "event": event_name,
+                        "status_code": response.status_code,
+                        "url": url,
+                        "retry_after_seconds": None,
+                    }
+                )
+
                 raise AdapterHTTPError(
                     f"HTTP {response.status_code}: {response.reason}",
                     status_code=response.status_code,
@@ -159,18 +177,52 @@ class BaseAdapter(ABC):
 
             # Parse JSON response
             try:
-                return response.json()
+                data = response.json()
+                logger.debug(
+                    "HTTP request succeeded",
+                    extra={
+                        "event": "adapter.fetch.succeeded",
+                        "status_code": response.status_code,
+                        "url": url,
+                    }
+                )
+                return data
             except (ValueError, requests.exceptions.JSONDecodeError) as e:
+                logger.error(
+                    f"Failed to parse JSON response from {url}",
+                    extra={
+                        "event": "adapter.fetch.error",
+                        "error_type": "JSONDecodeError",
+                        "url": url,
+                    }
+                )
                 raise AdapterResponseError(
                     f"Failed to parse JSON response from {url}: {e}"
                 ) from e
 
         except requests.exceptions.Timeout as e:
+            logger.warning(
+                f"Request to {url} timed out after {self.timeout} seconds",
+                extra={
+                    "event": "adapter.fetch.retryable_error",
+                    "error_type": "Timeout",
+                    "url": url,
+                    "timeout": self.timeout,
+                }
+            )
             raise AdapterTimeoutError(
                 f"Request to {url} timed out after {self.timeout} seconds",
                 url=url,
             ) from e
         except requests.exceptions.RequestException as e:
+            logger.error(
+                f"Request to {url} failed: {e}",
+                extra={
+                    "event": "adapter.fetch.error",
+                    "error_type": type(e).__name__,
+                    "url": url,
+                }
+            )
             raise AdapterHTTPError(
                 f"Request to {url} failed: {e}",
                 status_code=0,

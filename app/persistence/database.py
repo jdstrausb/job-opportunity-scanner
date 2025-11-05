@@ -14,13 +14,15 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.logging import get_logger
+
 from .exceptions import DatabaseConnectionError
 
 # Module-level engine and session factory
 _engine: Engine | None = None
 _session_factory: sessionmaker | None = None
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, component="database")
 
 
 def init_database(database_url: str) -> None:
@@ -44,7 +46,13 @@ def init_database(database_url: str) -> None:
     global _engine, _session_factory
 
     try:
-        logger.info(f"Initializing database with URL: {_redact_url(database_url)}")
+        logger.info(
+            f"Initializing database",
+            extra={
+                "event": "database.initializing",
+                "database_url": _redact_url(database_url),
+            }
+        )
 
         # Validate URL format
         if not database_url or not isinstance(database_url, str):
@@ -97,7 +105,13 @@ def init_database(database_url: str) -> None:
 
         create_schema(_engine)
 
-        logger.info("Database initialized successfully")
+        logger.info(
+            "Database initialized successfully",
+            extra={
+                "event": "database.initialised",
+                "database_url": _redact_url(database_url),
+            }
+        )
 
     except DatabaseConnectionError:
         raise
@@ -197,17 +211,24 @@ def get_session() -> Generator[Session, None, None]:
 
     session = _session_factory()
     try:
-        logger.debug("Database session created")
         yield session
         session.commit()
-        logger.debug("Database session committed")
+        logger.debug(
+            "Database session committed",
+            extra={"event": "database.session.committed"}
+        )
     except Exception as e:
         session.rollback()
-        logger.warning(f"Database session rolled back due to exception: {e}")
+        logger.warning(
+            f"Database session rolled back due to exception: {e}",
+            extra={
+                "event": "database.session.rolled_back",
+                "error_type": type(e).__name__,
+            }
+        )
         raise
     finally:
         session.close()
-        logger.debug("Database session closed")
 
 
 def get_engine() -> Engine:

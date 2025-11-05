@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            margin: 0 0 10px 0;
+            color: #1a1a1a;
+            font-size: 24px;
+        }
+        .company {
+            font-size: 18px;
+            color: #666;
+            margin: 5px 0;
+        }
+        .metadata {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-top: 10px;
+            font-size: 14px;
+            color: #666;
+        }
+        .metadata-item {
+            display: flex;
+            align-items: center;
+        }
+        .section {
+            margin: 20px 0;
+        }
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #1a1a1a;
+            margin-bottom: 10px;
+            border-bottom: 2px solid #e9ecef;
+            padding-bottom: 5px;
+        }
+        .match-quality {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .match-quality-perfect {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .match-quality-partial {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .snippet {
+            background-color: #f8f9fa;
+            padding: 12px;
+            margin: 10px 0;
+            border-left: 3px solid #007bff;
+            border-radius: 4px;
+        }
+        .snippet b {
+            background-color: #fff3cd;
+            padding: 2px 4px;
+            font-weight: 600;
+            color: #856404;
+        }
+        .match-reasons {
+            background-color: #e7f3ff;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 15px 0;
+        }
+        .match-reasons ul {
+            margin: 10px 0 0 0;
+            padding-left: 20px;
+        }
+        .match-reasons li {
+            margin: 5px 0;
+        }
+        .cta-button {
+            display: inline-block;
+            background-color: #007bff;
+            color: white;
+            padding: 12px 24px;
+            text-decoration: none;
+            border-radius: 4px;
+            font-weight: 600;
+            margin: 20px 0;
+        }
+        .cta-button:hover {
+            background-color: #0056b3;
+        }
+        .footer {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e9ecef;
+            font-size: 12px;
+            color: #666;
+        }
+        .search-terms {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .search-term {
+            background-color: #e9ecef;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 13px;
+            color: #495057;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{{ title }}</h1>
+        <div class="company">{{ company }}</div>
+        <div class="metadata">
+            <div class="metadata-item">📍 {{ location }}</div>
+            {% if posted_at %}
+            <div class="metadata-item">📅 Posted: {{ posted_at[:10] }}</div>
+            {% endif %}
+            <div class="metadata-item">
+                <span class="match-quality match-quality-{{ match_quality }}">{{ match_quality }} match</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <a href="{{ url }}" class="cta-button">View Job Posting →</a>
+    </div>
+
+    <div class="section match-reasons">
+        <div class="section-title">Why This Matches</div>
+        {{ match_reason | replace('\n', '<br>') | safe }}
+    </div>
+
+    {% if snippets_highlighted %}
+    <div class="section">
+        <div class="section-title">Relevant Excerpts from Description</div>
+        {% for snippet in snippets_highlighted[:3] %}
+        <div class="snippet">
+            {{ snippet | safe }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="section">
+        <div class="section-title">Matched Search Terms</div>
+        <div class="search-terms">
+            {% for term in search_terms %}
+            <span class="search-term">{{ term }}</span>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-title">Job Details</div>
+        <p>
+            <strong>Source:</strong> {{ source_type | title }} ({{ source_identifier }})<br>
+            <strong>First Seen:</strong> {{ first_seen_at[:10] }}<br>
+            <strong>Last Updated:</strong> {{ last_seen_at[:10] }}
+        </p>
+    </div>
+
+    <div class="footer">
+        <p>This notification was generated by Job Opportunity Scanner.</p>
+        <p>Job Key: {{ job_key[:16] }}... | Version: {{ version_hash[:8] }}...</p>
+    </div>
+</body>
+</html>
