@@ -107,22 +107,185 @@ python -m app.main --log-level DEBUG
 
 ### Docker Deployment
 
-Build the image:
+#### Building the Image
+
+Build the Docker image locally:
 ```bash
 docker build -t job-opportunity-scanner:latest .
 ```
 
-Run the container:
+Optional: Build with BuildKit for improved caching:
+```bash
+DOCKER_BUILDKIT=1 docker build -t job-opportunity-scanner:latest .
+```
+
+Build with custom version and build date:
+```bash
+docker build \
+  --build-arg APP_VERSION=1.0.0 \
+  --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
+  -t job-opportunity-scanner:latest .
+```
+
+#### Running the Container
+
+**Scheduler mode (default - runs continuously):**
 ```bash
 docker run -d \
-  -v /data:/data \
+  --name job-scanner \
+  -v job_scanner_data:/app/data \
+  -v $(pwd)/config.yaml:/app/config.yaml \
+  --env-file .env \
+  job-opportunity-scanner:latest
+```
+
+**Manual run mode (one-time scan):**
+```bash
+docker run --rm \
+  -v job_scanner_data:/app/data \
+  -v $(pwd)/config.yaml:/app/config.yaml \
+  --env-file .env \
+  job-opportunity-scanner:latest \
+  --manual-run
+```
+
+**With explicit environment variables:**
+```bash
+docker run -d \
+  --name job-scanner \
+  -v job_scanner_data:/app/data \
+  -v $(pwd)/config.yaml:/app/config.yaml \
   -e SMTP_HOST="smtp.gmail.com" \
   -e SMTP_PORT="587" \
   -e SMTP_USER="your-email@gmail.com" \
   -e SMTP_PASS="your-app-password" \
   -e ALERT_TO_EMAIL="alerts@example.com" \
-  --name job-scanner \
+  -e LOG_LEVEL="INFO" \
   job-opportunity-scanner:latest
+```
+
+**With bind mount for local testing:**
+```bash
+docker run -d \
+  --name job-scanner \
+  -v $(pwd)/data:/app/data \
+  -v $(pwd)/config.yaml:/app/config.yaml \
+  --env-file .env \
+  job-opportunity-scanner:latest
+```
+
+#### Required Environment Variables
+
+The following environment variables **must** be set for the container to start:
+
+- `SMTP_HOST` - SMTP server hostname (e.g., `smtp.gmail.com`)
+- `SMTP_PORT` - SMTP server port (e.g., `587` for TLS, `465` for SSL)
+- `ALERT_TO_EMAIL` - Email address to receive job alerts
+
+#### Optional Environment Variables
+
+- `SMTP_USER` - SMTP authentication username (if required by your server)
+- `SMTP_PASS` - SMTP authentication password (if required by your server)
+- `SMTP_SENDER_NAME` - Display name for email sender (default: "Job Opportunity Scanner")
+- `LOG_LEVEL` - Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL (default: INFO)
+- `ENVIRONMENT` - Environment name: development, staging, production (default: production)
+- `DATABASE_URL` - SQLAlchemy database URL (default: `sqlite:///./data/job_scanner.db`)
+
+Missing required variables will cause startup to fail with a `ConfigurationError`.
+
+#### Data Persistence
+
+The container stores SQLite database at `/app/data/job_scanner.db`. To preserve job history between container restarts, mount a volume:
+
+**Named volume (recommended for production):**
+```bash
+docker volume create job_scanner_data
+docker run -v job_scanner_data:/app/data ...
+```
+
+**Bind mount (useful for development/inspection):**
+```bash
+docker run -v $(pwd)/data:/app/data ...
+```
+
+⚠️ **Important**: Only run one container instance per volume. SQLite does not support concurrent writes from multiple containers.
+
+#### Configuration File
+
+Mount your `config.yaml` to `/app/config.yaml`:
+```bash
+-v $(pwd)/config.yaml:/app/config.yaml
+```
+
+Without this mount, the container will attempt to use a default configuration and will likely fail validation.
+
+#### Inspecting the Database
+
+To inspect the SQLite database using the database volume:
+```bash
+docker run --rm -it \
+  -v job_scanner_data:/app/data \
+  python:3.13-slim \
+  sqlite3 /app/data/job_scanner.db
+```
+
+Inside the SQLite shell:
+```sql
+.tables
+SELECT * FROM jobs LIMIT 10;
+.quit
+```
+
+#### Container Logs
+
+View container logs to monitor scan progress:
+```bash
+# Follow logs in real-time
+docker logs -f job-scanner
+
+# View last 100 lines
+docker logs --tail 100 job-scanner
+
+# View logs with timestamps
+docker logs -t job-scanner
+```
+
+Look for these log events:
+- `service.starting` - Service initialization
+- `service.manual_scan.completed` - Manual scan finished
+- `pipeline.scan.completed` - Scheduled scan finished
+- Errors and warnings for troubleshooting
+
+#### Resource Limits
+
+Recommended resource limits for production:
+```bash
+docker run -d \
+  --name job-scanner \
+  --memory=512m \
+  --cpus=1 \
+  -v job_scanner_data:/app/data \
+  -v $(pwd)/config.yaml:/app/config.yaml \
+  --env-file .env \
+  job-opportunity-scanner:latest
+```
+
+#### Stopping and Removing
+
+```bash
+# Stop the container
+docker stop job-scanner
+
+# Remove the container
+docker rm job-scanner
+
+# Stop and remove in one command
+docker rm -f job-scanner
+```
+
+The data volume persists even after container removal. To remove the volume:
+```bash
+docker volume rm job_scanner_data
 ```
 
 ## Configuration Reference
