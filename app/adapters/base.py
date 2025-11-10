@@ -258,8 +258,8 @@ class BaseAdapter(ABC):
         text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
         text = re.sub(r"</p>", "\n\n", text, flags=re.IGNORECASE)
 
-        # Strip all remaining HTML tags
-        text = re.sub(r"<[^>]+>", "", text)
+        # Strip all remaining HTML tags, replacing them with a space
+        text = re.sub(r"<[^>]+>", " ", text)
 
         # Collapse horizontal whitespace to single space (preserve newlines)
         text = re.sub(r"[ \t]+", " ", text)

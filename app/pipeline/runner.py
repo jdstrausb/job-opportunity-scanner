@@ -287,16 +287,17 @@ class ScanPipeline:
 
                             # Match jobs that need re-evaluation
                             if norm_result.should_re_match:
-                                match_result = self.keyword_matcher.evaluate(norm_result.job)
+                                match_result = self.keyword_matcher.evaluate(
+                                    norm_result.job, norm_result.matchable_text
+                                )
 
-                                if match_result.matched:
+                                if match_result.is_match:
                                     stats.matched_count += 1
 
                                     # Create candidate match
                                     candidate = CandidateMatch(
-                                        job=norm_result.job,
+                                        normalization_result=norm_result,
                                         match_result=match_result,
-                                        should_notify=norm_result.is_new or norm_result.was_updated,
                                     )
 
                                     if candidate.should_notify:
@@ -347,10 +348,9 @@ class ScanPipeline:
 
                             # Tally notification results
                             for result in results:
-                                if result.sent:
+                                if result.is_success():
                                     stats.notified_count += 1
-                                    if result.should_record_alert():
-                                        stats.alerts_sent += 1
+                                    stats.alerts_sent += 1
                                 elif result.error:
                                     stats.error_count += 1
 

@@ -1,0 +1,66 @@
+# Job Opportunity Scanner Configuration
+# Copy this file to config.yaml and customize for your use case
+
+# List of ATS sources to monitor
+sources:
+  - name: "Cloudflare Careers"
+    type: "greenhouse"
+    identifier: "cloudflare"
+    enabled: true
+
+# Polling interval for scanning jobs
+# Supported formats: ISO-8601 duration (e.g., PT15M) or human-readable (e.g., 15m)
+# Minimum interval: 5 minutes
+scan_interval: "15m"
+
+# Keyword-based search criteria for filtering job postings
+search_criteria:
+  # Required terms: ALL terms must be present in job title or description (AND logic)
+  # Case-insensitive, punctuation-insensitive matching
+  required_terms:
+    - "engineer"
+    - "remote"
+
+  # Keyword groups: AT LEAST ONE term from each group must match (OR within groups)
+  # Case-insensitive, punctuation-insensitive matching
+  keyword_groups: []
+  # Exclusion terms: Jobs containing ANY of these terms are filtered out
+  # Takes precedence over required and keyword groups
+  exclude_terms:
+    - "intern"
+    - "sales"
+
+# Email notification configuration
+# Note: Email credentials should be set via environment variables:
+# - SMTP_HOST (required)
+# - SMTP_PORT (required)
+# - SMTP_USER (required if authentication needed)
+# - SMTP_PASS (required if authentication needed)
+# - ALERT_TO_EMAIL (required)
+email:
+  # Use TLS/STARTTLS for secure connection (recommended)
+  use_tls: true
+  # Number of retry attempts for failed email sends
+  max_retries: 3
+  # Retry backoff multiplier (exponential backoff)
+  retry_backoff_multiplier: 2
+  # Initial retry delay in seconds
+  retry_initial_delay: 5
+
+# Logging configuration
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  # Override via command-line: --log-level DEBUG
+  level: "INFO"
+  # Output format: structured JSON or key=value pairs
+  format: "key-value"  # Options: "json" or "key-value"
+
+# Advanced options
+advanced:
+  # Request timeout for ATS API calls (seconds)
+  http_request_timeout: 30
+  # User-Agent string for HTTP requests
+  user_agent: "JobOpportunityScanner/1.0"
+  # Maximum number of jobs to process per source per scan
+  # Set to 0 for unlimited (use with caution on large career sites)
+  max_jobs_per_source: 1000

@@ -1,0 +1,171 @@
+# Sample Job Fixtures for End-to-End Validation
+#
+# This fixture file provides deterministic test data for integration testing
+# the complete Job Opportunity Scanner pipeline. Each source contains jobs
+# designed to exercise different matching scenarios:
+#
+# - Matching jobs: Meet all required_terms and keyword_groups criteria
+# - Excluded jobs: Contain terms from exclude_terms list
+# - Updatable jobs: Used to test change detection and re-notification
+#
+# Schema:
+#   sources:
+#     <source_identifier>:
+#       - external_id: Unique job ID from the ATS
+#         title: Job title
+#         company: Company name (optional, defaults to source name)
+#         location: Job location (use "Remote" for remote jobs)
+#         description: Full job description (can contain HTML)
+#         url: Application URL
+#         posted_at: ISO 8601 timestamp (optional)
+#         updated_at: ISO 8601 timestamp (optional)
+
+sources:
+  # Greenhouse test source
+  testcompanya:
+    # Job 1: Should MATCH - Contains required terms (python, backend) and keyword group (remote)
+    - external_id: "gh-101"
+      title: "Senior Backend Engineer"
+      company: "Test Company A"
+      location: "Remote"
+      description: |
+        <p>We're looking for a <strong>senior backend engineer</strong> with expertise in Python.</p>
+        <p>This is a remote position working on our core API platform.</p>
+        <h2>Requirements</h2>
+        <ul>
+          <li>5+ years of Python development experience</li>
+          <li>Experience with REST APIs and microservices</li>
+          <li>Strong knowledge of SQL databases</li>
+        </ul>
+        <h2>Benefits</h2>
+        <ul>
+          <li>100% remote work</li>
+          <li>Competitive salary and equity</li>
+          <li>Comprehensive health benefits</li>
+        </ul>
+      url: "https://boards.greenhouse.io/testcompanya/jobs/gh-101"
+      posted_at: "2025-11-01T10:00:00Z"
+      updated_at: "2025-11-01T10:00:00Z"
+
+    # Job 2: Should MATCH - Contains required terms and different keyword group (work-from-home + senior)
+    - external_id: "gh-102"
+      title: "Senior Python Backend Developer"
+      company: "Test Company A"
+      location: "Work from home"
+      description: |
+        <p>Join our backend team to build scalable Python services as a senior engineer.</p>
+        <p>You'll work on data processing pipelines and API development.</p>
+        <p>This position offers full work-from-home flexibility.</p>
+      url: "https://boards.greenhouse.io/testcompanya/jobs/gh-102"
+      posted_at: "2025-11-02T14:30:00Z"
+      updated_at: "2025-11-02T14:30:00Z"
+
+    # Job 3: Should be EXCLUDED - Contains exclude term "django"
+    - external_id: "gh-103"
+      title: "Django Backend Engineer"
+      company: "Test Company A"
+      location: "Remote"
+      description: |
+        <p>We need a backend engineer with Django expertise.</p>
+        <p>You'll maintain our legacy Django monolith while we migrate to FastAPI.</p>
+        <p>Python and backend experience required.</p>
+      url: "https://boards.greenhouse.io/testcompanya/jobs/gh-103"
+      posted_at: "2025-11-03T09:15:00Z"
+      updated_at: "2025-11-03T09:15:00Z"
+
+    # Job 4: Should NOT MATCH - Missing keyword group (not remote)
+    - external_id: "gh-104"
+      title: "Backend Python Engineer"
+      company: "Test Company A"
+      location: "San Francisco, CA"
+      description: |
+        <p>Looking for a Python backend engineer to work on-site in our SF office.</p>
+        <p>Great opportunity to work with cutting-edge technology.</p>
+      url: "https://boards.greenhouse.io/testcompanya/jobs/gh-104"
+      posted_at: "2025-11-04T11:00:00Z"
+      updated_at: "2025-11-04T11:00:00Z"
+
+    # Job 5: UPDATABLE - Will be modified between test runs to verify change detection
+    - external_id: "gh-105"
+      title: "Staff Backend Engineer - Python"
+      company: "Test Company A"
+      location: "Remote"
+      description: |
+        <p>We're hiring a staff-level backend engineer with deep Python expertise.</p>
+        <p>This role focuses on architecting scalable backend systems.</p>
+        <p>Fully remote position with flexible hours.</p>
+        <p>ORIGINAL_VERSION</p>
+      url: "https://boards.greenhouse.io/testcompanya/jobs/gh-105"
+      posted_at: "2025-11-05T08:00:00Z"
+      updated_at: "2025-11-05T08:00:00Z"
+
+  # Lever test source
+  testcompanyb:
+    # Job 1: Should MATCH - Contains required terms and senior keyword
+    - external_id: "lever-201"
+      title: "Senior Python Engineer (Remote)"
+      company: "Test Company B"
+      location: "Remote - US"
+      description: |
+        Looking for a senior Python engineer to join our backend infrastructure team.
+
+        You'll be responsible for building and maintaining our core services using Python,
+        working with PostgreSQL, Redis, and Kubernetes.
+
+        This is a fully remote position available to candidates in the US.
+
+        Requirements:
+        - 7+ years Python development
+        - Strong backend architecture skills
+        - Experience with cloud platforms (AWS/GCP)
+      url: "https://jobs.lever.co/testcompanyb/lever-201"
+      posted_at: "2025-10-28T16:00:00Z"
+      updated_at: "2025-10-28T16:00:00Z"
+
+    # Job 2: Should be EXCLUDED - Contains exclude term "legacy"
+    - external_id: "lever-202"
+      title: "Backend Engineer - Legacy Systems"
+      company: "Test Company B"
+      location: "Remote"
+      description: |
+        We need a backend engineer to maintain our legacy Python codebase.
+
+        You'll work on a large monolithic application, fixing bugs and adding features
+        to our established systems.
+
+        Python experience required. Remote work available.
+      url: "https://jobs.lever.co/testcompanyb/lever-202"
+      posted_at: "2025-10-29T10:30:00Z"
+      updated_at: "2025-10-29T10:30:00Z"
+
+    # Job 3: Should MATCH - Contains required terms and lead keyword (in keyword_groups)
+    - external_id: "lever-203"
+      title: "Lead Backend Engineer - Python"
+      company: "Test Company B"
+      location: "Remote"
+      description: |
+        Seeking a lead backend engineer to guide our Python development efforts.
+
+        You'll lead a team of engineers building microservices and APIs in a remote-first environment.
+        We're a distributed company with no office requirement.
+
+        Tech stack: Python, FastAPI, PostgreSQL, Docker, Kubernetes
+      url: "https://jobs.lever.co/testcompanyb/lever-203"
+      posted_at: "2025-10-30T13:45:00Z"
+      updated_at: "2025-10-30T13:45:00Z"
+
+    # Job 4: Should NOT MATCH - Missing required term "backend"
+    - external_id: "lever-204"
+      title: "Senior Python Data Engineer"
+      company: "Test Company B"
+      location: "Remote"
+      description: |
+        Join our data team as a senior Python data engineer.
+
+        You'll build data pipelines, ETL processes, and analytics infrastructure
+        using Python, Airflow, and Spark.
+
+        This is a remote position with competitive compensation.
+      url: "https://jobs.lever.co/testcompanyb/lever-204"
+      posted_at: "2025-11-01T09:00:00Z"
+      updated_at: "2025-11-01T09:00:00Z"

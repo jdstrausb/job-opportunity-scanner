@@ -1,0 +1,12 @@
+.coverage
+.claude/
+.pytest_cache/
+.venv/
+htmlcov/
+.dockerignore
+.gitignore
+uv.lock
+.DS_Store
+.contextignore
+*/__init__.py
+.git/

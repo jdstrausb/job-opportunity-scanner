@@ -1,0 +1,74 @@
+# Sample Configuration for End-to-End Validation
+#
+# This configuration file is designed for use with the sample scan harness
+# (scripts/run_sample_scan.py) to validate the Job Opportunity Scanner pipeline
+# using fixture data.
+#
+# Usage:
+#   python scripts/run_sample_scan.py --config docs/sample_end_validation.yaml
+#
+# The search criteria below match the jobs defined in:
+#   tests/fixtures/end_validation/sample_jobs.yaml
+#
+# Expected Results:
+#   - 9 jobs fetched (5 from testcompanya, 4 from testcompanyb)
+#   - 5 jobs matched (3 from testcompanya, 2 from testcompanyb)
+#   - 5 notifications sent (one per matched job)
+
+# ATS Sources Configuration
+sources:
+  # Greenhouse source - Test Company A
+  - name: "Test Company A"
+    type: "greenhouse"
+    identifier: "testcompanya"
+    enabled: true
+
+  # Lever source - Test Company B
+  - name: "Test Company B"
+    type: "lever"
+    identifier: "testcompanyb"
+    enabled: true
+
+# Scan interval (not used in manual mode, but required for config validation)
+scan_interval: "15m"
+
+# Search Criteria
+# These criteria are designed to match specific jobs in the sample_jobs.yaml fixture
+search_criteria:
+  # Required terms - ALL must be present in job title or description
+  required_terms:
+    - "python"
+    - "backend"
+
+  # Keyword groups - At least ONE term from EACH group must be present
+  keyword_groups:
+    # Remote work indicators
+    - ["remote", "work-from-home"]
+    # Seniority level
+    - ["senior", "lead", "staff"]
+
+  # Exclude terms - If ANY of these are present, job is rejected
+  exclude_terms:
+    - "django"
+    - "legacy"
+
+# Email Configuration
+# For manual validation with fixtures, these values are used but emails are mocked
+email:
+  sender_email: "scanner@example.com"
+  subject_prefix: "[Job Alert - Validation]"
+  use_tls: true
+  max_retries: 3
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  format: "key-value"  # Options: "key-value" or "json"
+
+# Advanced Configuration (optional)
+advanced:
+  # HTTP timeout for adapter requests (in seconds)
+  request_timeout: 30
+
+  # Maximum jobs to fetch per source (0 = unlimited)
+  max_jobs_per_source: 1000

@@ -7,6 +7,7 @@ This module implements the matching logic that:
 """
 
 import logging
+import re
 from typing import Dict, List, Set
 
 from app.config.models import SearchCriteria
@@ -60,6 +61,15 @@ class KeywordMatcher:
         Returns:
             MatchResult with match decision and details
         """
+        self.logger.debug(
+            "Evaluating job against search criteria",
+            extra={
+                "job_key": job.job_key,
+                "job_title": job.title,
+                "normalized_text_to_search": matchable_text.full_text_normalized,
+            },
+        )
+
         # Step 1: Build field index for quick lookups
         field_index = {
             "title": matchable_text.title_normalized,
@@ -101,7 +111,7 @@ class KeywordMatcher:
 
         # Step 4: Check exclude terms
         for term in self.search_criteria.exclude_terms:
-            if self._term_matches_any_field(term, field_index):
+            if self._term_matches_any_field(term, field_index, whole_word=True):
                 matched_exclude_terms.add(term)
 
         # Step 5: Compute overall match decision
@@ -189,22 +199,35 @@ class KeywordMatcher:
         )
 
     @staticmethod
-    def _term_matches_any_field(term: str, field_index: Dict[str, str]) -> bool:
-        """Check if a term (substring) appears in any field.
-
-        Uses simple substring matching on normalized (lowercase, punctuation-stripped) text.
+    def _term_matches_any_field(
+        term: str, field_index: Dict[str, str], *, whole_word: bool = False
+    ) -> bool:
+        """Check if a term (substring or whole word) appears in any field.
 
         Args:
             term: Normalized term to search for
             field_index: Dict of field names to normalized text
+            whole_word: When True, require word-boundary matches for single-word terms
 
         Returns:
             True if term found in any field
         """
         for field_text in field_index.values():
-            if term in field_text:
+            if KeywordMatcher._term_in_text(term, field_text, whole_word=whole_word):
                 return True
         return False
+
+    @staticmethod
+    def _term_in_text(term: str, field_text: str, *, whole_word: bool) -> bool:
+        """Determine if the term exists within the provided text."""
+        if not field_text:
+            return False
+
+        if whole_word and " " not in term:
+            pattern = re.compile(rf"\b{re.escape(term)}\b")
+            return bool(pattern.search(field_text))
+
+        return term in field_text
 
     @staticmethod
     def _record_term_matches(

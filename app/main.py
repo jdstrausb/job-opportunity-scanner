@@ -1,5 +1,8 @@
 """Main entry point for the Job Opportunity Scanner service."""
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import argparse
 import logging
 import os

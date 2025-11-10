@@ -227,9 +227,9 @@ def normalize_for_matching(text: str) -> str:
     # Replace multiple whitespace with single space
     normalized = re.sub(r"\s+", " ", normalized)
 
-    # Remove common punctuation but keep spaces
-    # Keep hyphens and apostrophes as they're meaningful in keywords
-    normalized = re.sub(r"[,;.!?()[\]{}\"<>]", " ", normalized)
+    # Replace anything that is NOT a letter, number, apostrophe, or hyphen with a space.
+    # The hyphen MUST be at the end of the set to be treated as a literal character.
+    normalized = re.sub(r"[^\w\s'-]", " ", normalized)
 
     # Clean up any double spaces introduced
     normalized = re.sub(r"\s+", " ", normalized).strip()

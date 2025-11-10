@@ -4,6 +4,8 @@ This module provides database initialization, engine creation, and session lifec
 management for the persistence layer.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 from contextlib import contextmanager

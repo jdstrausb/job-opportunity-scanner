@@ -17,6 +17,7 @@ class SourceRunStats:
         upserted_count: Number of jobs inserted or updated in database
         matched_count: Number of jobs that matched search criteria
         notified_count: Number of notifications successfully sent
+        alerts_sent: Number of alerts recorded in the database
         error_count: Number of errors encountered
         duration_seconds: Time spent processing this source
         had_errors: Whether any errors occurred during processing
@@ -29,6 +30,7 @@ class SourceRunStats:
     upserted_count: int = 0
     matched_count: int = 0
     notified_count: int = 0
+    alerts_sent: int = 0
     error_count: int = 0
     duration_seconds: float = 0.0
     had_errors: bool = False
@@ -79,6 +81,7 @@ class PipelineRunResult:
             self.total_upserted = sum(s.upserted_count for s in self.source_stats)
             self.total_matched = sum(s.matched_count for s in self.source_stats)
             self.total_notified = sum(s.notified_count for s in self.source_stats)
+            self.alerts_sent = sum(s.alerts_sent for s in self.source_stats)
             self.total_errors = sum(s.error_count for s in self.source_stats)
             self.had_errors = any(s.had_errors for s in self.source_stats)
 

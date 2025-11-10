@@ -471,6 +471,70 @@ class TestKeywordMatcher:
         assert result.is_match is True
         assert result.matched_fields["location"] == set()
 
+    def test_exclude_term_ignores_substrings(self):
+        """Exclude terms should not match inside other words like 'internet'."""
+        criteria = SearchCriteria(
+            required_terms=["engineer"],
+            keyword_groups=[],
+            exclude_terms=["intern"],
+        )
+
+        job = Job(
+            job_key="internet_job",
+            source_type="greenhouse",
+            source_identifier="test",
+            external_id="321",
+            title="Network Engineer",
+            company="Web Scale Inc",
+            location="Remote",
+            description="Help build a better internet with our distributed engineering team.",
+            url="https://example.com/jobs/321",
+            posted_at=None,
+            updated_at=None,
+            first_seen_at=utc_now(),
+            last_seen_at=utc_now(),
+            content_hash="hash4",
+        )
+
+        matcher = KeywordMatcher(criteria)
+        mt = MatchableText.from_job(job)
+        result = matcher.evaluate(job, mt)
+
+        assert result.is_match is True
+        assert "intern" not in result.matched_exclude_terms
+
+    def test_exclude_term_matches_whole_word(self):
+        """Exclude terms should still match when the word itself appears."""
+        criteria = SearchCriteria(
+            required_terms=["engineer"],
+            keyword_groups=[],
+            exclude_terms=["intern"],
+        )
+
+        job = Job(
+            job_key="intern_job",
+            source_type="greenhouse",
+            source_identifier="test",
+            external_id="654",
+            title="Software Engineer Intern",
+            company="Startup Labs",
+            location="Remote",
+            description="This internship is for an intern engineer joining our platform team.",
+            url="https://example.com/jobs/654",
+            posted_at=None,
+            updated_at=None,
+            first_seen_at=utc_now(),
+            last_seen_at=utc_now(),
+            content_hash="hash5",
+        )
+
+        matcher = KeywordMatcher(criteria)
+        mt = MatchableText.from_job(job)
+        result = matcher.evaluate(job, mt)
+
+        assert result.is_match is False
+        assert "intern" in result.matched_exclude_terms
+
 
 class TestMatchingUtils:
     """Tests for matching utility functions."""

@@ -28,6 +28,7 @@ from app.config.models import (
 )
 from app.domain.models import Job, RawJob
 from app.matching.engine import KeywordMatcher
+from app.notifications.models import NotificationResult
 from app.notifications.service import NotificationService
 from app.pipeline import PipelineRunResult, ScanPipeline, SourceRunStats
 from app.persistence.database import close_database, init_database
@@ -221,12 +222,12 @@ class TestScanPipeline:
             mock_adapter = Mock()
 
             # First source succeeds, second fails
-            def side_effect(source_config):
+            def side_effect(source_config, advanced_config):
                 if source_config.identifier == "test1":
                     mock_adapter.fetch_jobs.return_value = sample_raw_jobs
                 else:
                     mock_adapter.fetch_jobs.side_effect = AdapterHTTPError(
-                        "API error", status_code=500
+                        "API error", url="http://test.com", status_code=500
                     )
                 return mock_adapter
 
@@ -431,6 +432,46 @@ class TestScanPipeline:
             assert result.total_upserted == 0
             assert not result.had_errors
 
+    def test_notification_counts_are_tallied(
+        self,
+        temp_database,
+        app_config,
+        env_config,
+        mock_notification_service,
+        keyword_matcher,
+        sample_raw_jobs,
+    ):
+        """Test that successful notifications are correctly counted."""
+        # Mock notification service to return successful results
+        notification_results = [
+            NotificationResult(
+                job_key="job1", version_hash="v1", attempts=1, status="sent"
+            ),
+            NotificationResult(
+                job_key="job2", version_hash="v2", attempts=1, status="sent"
+            ),
+        ]
+        mock_notification_service.send_notifications.return_value = notification_results
+
+        pipeline = ScanPipeline(
+            app_config=app_config,
+            env_config=env_config,
+            notification_service=mock_notification_service,
+            keyword_matcher=keyword_matcher,
+        )
+
+        with patch("app.pipeline.runner.get_adapter") as mock_get_adapter:
+            mock_adapter = Mock()
+            mock_adapter.fetch_jobs.return_value = sample_raw_jobs
+            mock_get_adapter.return_value = mock_adapter
+
+            result = pipeline.run_once()
+
+            # Assert that notification counts are aggregated correctly
+            assert result.total_notified == 4
+            assert result.alerts_sent == 4
+            assert not result.had_errors
+
 
 class TestPipelineRunResult:
     """Test suite for PipelineRunResult model."""
@@ -448,6 +489,7 @@ class TestPipelineRunResult:
                 upserted_count=8,
                 matched_count=5,
                 notified_count=3,
+                alerts_sent=3,
                 error_count=0,
             ),
             SourceRunStats(
@@ -457,6 +499,7 @@ class TestPipelineRunResult:
                 upserted_count=5,
                 matched_count=2,
                 notified_count=1,
+                alerts_sent=1,
                 error_count=1,
                 had_errors=True,
             ),
@@ -473,6 +516,7 @@ class TestPipelineRunResult:
         assert result.total_upserted == 13
         assert result.total_matched == 7
         assert result.total_notified == 4
+        assert result.alerts_sent == 4
         assert result.total_errors == 1
         assert result.had_errors  # One source had errors
 
