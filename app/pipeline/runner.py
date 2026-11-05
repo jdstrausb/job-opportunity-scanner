@@ -3,14 +3,15 @@
 import logging
 import threading
 import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from uuid import uuid4
 
 from app.adapters.exceptions import AdapterError
 from app.adapters.factory import get_adapter
 from app.config.environment import EnvironmentConfig
-from app.config.models import AppConfig, SourceConfig
+from app.config.models import AppConfig, NotificationMode, SourceConfig
 from app.domain.models import SourceStatus
+from app.filtering import FilterContext, FilteringService
 from app.logging import get_logger
 from app.logging.context import log_context
 from app.matching.engine import KeywordMatcher
@@ -55,6 +56,7 @@ class ScanPipeline:
         self.env_config = env_config
         self.notification_service = notification_service
         self.keyword_matcher = keyword_matcher
+        self.filtering_service = FilteringService()
         self._lock = threading.Lock()
 
     def run_once(self) -> PipelineRunResult:
@@ -65,8 +67,10 @@ class ScanPipeline:
         1. Acquires a lock to prevent concurrent runs
         2. Processes each enabled source sequentially
         3. For each source: fetch → normalize → persist → match → notify
-        4. Aggregates metrics across all sources
-        5. Returns comprehensive results
+           (legacy mode) or accumulate matches (digest mode)
+        4. In digest mode, sends one consolidated digest after all sources
+        5. Aggregates metrics across all sources
+        6. Returns comprehensive results
 
         Returns:
             PipelineRunResult with aggregate metrics and per-source stats
@@ -78,6 +82,8 @@ class ScanPipeline:
         run_started_at = utc_now()
         run_id = uuid4().hex
         source_stats: List[SourceRunStats] = []
+        all_digest_candidates: List[CandidateMatch] = []
+        digest_matches_by_source: List[Tuple[SourceRunStats, List[CandidateMatch]]] = []
 
         # Try to acquire the lock; if already held, skip this run
         if not self._lock.acquire(blocking=False):
@@ -129,8 +135,13 @@ class ScanPipeline:
                         )
                         continue
 
-                    stats = self._process_source(source_config, run_started_at, run_id)
+                    stats, digest_matches = self._process_source(
+                        source_config, run_started_at, run_id
+                    )
                     source_stats.append(stats)
+                    if digest_matches:
+                        all_digest_candidates.extend(digest_matches)
+                        digest_matches_by_source.append((stats, digest_matches))
 
                 # Compute final results
                 run_finished_at = utc_now()
@@ -140,6 +151,12 @@ class ScanPipeline:
                     source_stats=source_stats,
                 )
 
+                # Dispatch a single run-wide digest after all sources finish
+                if all_digest_candidates:
+                    self._send_global_digest(
+                        all_digest_candidates, digest_matches_by_source, result, run_id
+                    )
+
                 logger.info(
                     "Pipeline run completed",
                     extra={
@@ -147,6 +164,7 @@ class ScanPipeline:
                         "duration_ms": int(result.total_duration_seconds * 1000),
                         "total_fetched": result.total_fetched,
                         "total_normalized": result.total_normalized,
+                        "total_filtered": result.total_filtered,
                         "total_upserted": result.total_upserted,
                         "total_matched": result.total_matched,
                         "total_notified": result.total_notified,
@@ -161,9 +179,80 @@ class ScanPipeline:
         finally:
             self._lock.release()
 
+    def _send_global_digest(
+        self,
+        all_candidates: List[CandidateMatch],
+        candidates_by_source: List[Tuple[SourceRunStats, List[CandidateMatch]]],
+        result: PipelineRunResult,
+        run_id: str,
+    ) -> None:
+        """
+        Send one consolidated digest for the whole run and attribute counts to sources.
+
+        Runs in its own transaction. Failures are recorded on the result
+        (``had_errors`` / ``run_error_count``) and never discard persisted jobs.
+
+        Args:
+            all_candidates: Candidates accumulated across all sources
+            candidates_by_source: Per-source candidates used for count attribution
+            result: Run result to update (aggregates are recomputed)
+            run_id: Run ID used as the digest scan identifier
+        """
+        logger.info(
+            f"Sending global digest for {len(all_candidates)} matches "
+            f"from {len(candidates_by_source)} sources",
+            extra={
+                "event": "pipeline.digest.sending",
+                "count": len(all_candidates),
+                "source_count": len(candidates_by_source),
+                "notification_mode": "digest",
+            },
+        )
+
+        try:
+            with get_session() as session:
+                alert_repo = AlertRepository(session)
+                digest_result = self.notification_service.send_digest(
+                    all_candidates,
+                    self.env_config,
+                    self.app_config.email,
+                    alert_repo,
+                    run_id,
+                )
+                # Persist alert records
+                session.commit()
+        except Exception as e:
+            result.run_error_count += 1
+            logger.error(
+                f"Global digest error: {e}",
+                extra={"event": "pipeline.digest.error", "error": str(e)},
+                exc_info=True,
+            )
+            result.recompute_aggregates()
+            return
+
+        if digest_result.status == "sent":
+            # The service only sends candidates whose content changed; mirror that here.
+            for stats, candidates in candidates_by_source:
+                sent = sum(1 for c in candidates if c.content_changed)
+                stats.notified_count += sent
+                stats.alerts_sent += sent
+            logger.info(
+                "Global digest sent",
+                extra={"event": "pipeline.digest.sent", "count": len(all_candidates)},
+            )
+        elif digest_result.status == "failed":
+            result.run_error_count += 1
+            logger.error(
+                f"Global digest failed: {digest_result.error}",
+                extra={"event": "pipeline.digest.failed", "error": digest_result.error},
+            )
+
+        result.recompute_aggregates()
+
     def _process_source(
         self, source_config: SourceConfig, scan_timestamp, run_id: str
-    ) -> SourceRunStats:
+    ) -> Tuple[SourceRunStats, List[CandidateMatch]]:
         """
         Process a single source: fetch, normalize, persist, match, notify.
 
@@ -173,10 +262,12 @@ class ScanPipeline:
             run_id: Run ID for context propagation
 
         Returns:
-            SourceRunStats with metrics for this source
+            Tuple of SourceRunStats and the matches deferred for the global digest
+            (empty unless notification mode is DIGEST).
         """
         source_start = time.time()
         stats = SourceRunStats(source_id=source_config.identifier)
+        digest_matches: List[CandidateMatch] = []
 
         # Set source-level context for all operations
         with log_context(
@@ -257,7 +348,7 @@ class ScanPipeline:
 
                         # Return early for this source
                         stats.duration_seconds = time.time() - source_start
-                        return stats
+                        return stats, digest_matches
 
                     # Normalize and persist jobs
                     matches_to_notify: List[CandidateMatch] = []
@@ -265,11 +356,41 @@ class ScanPipeline:
                     updated_count = 0
                     unchanged_count = 0
 
+                    # Create filter context for this source
+                    filter_context = FilterContext(
+                        filtering_rules=self.app_config.filtering,
+                        scan_timestamp=scan_timestamp,
+                        run_id=run_id,
+                    )
+
                     for raw_job in raw_jobs:
                         try:
                             # Normalize the job
                             norm_result = normalizer.normalize(raw_job, source_config)
                             stats.normalized_count += 1
+
+                            # Apply filtering before persistence
+                            filter_result = self.filtering_service.evaluate_job(
+                                norm_result.job, filter_context
+                            )
+
+                            if not filter_result.should_process:
+                                # Job filtered out - log and skip
+                                stats.filtered_count += 1
+                                if filter_result.filter_reason:
+                                    stats.filter_reasons[filter_result.filter_reason] = (
+                                        stats.filter_reasons.get(filter_result.filter_reason, 0) + 1
+                                    )
+
+                                logger.debug(
+                                    f"Job filtered out: {norm_result.job.title}",
+                                    extra={
+                                        "job_key": norm_result.job.job_key,
+                                        "filter_reason": filter_result.filter_reason,
+                                        "filter_metadata": filter_result.filter_metadata,
+                                    },
+                                )
+                                continue  # Skip to next job
 
                             # Persist based on normalization result
                             if norm_result.should_upsert:
@@ -319,65 +440,75 @@ class ScanPipeline:
 
                     logger.info(
                         f"Normalized {stats.normalized_count} jobs: "
+                        f"{stats.filtered_count} filtered, "
                         f"{new_count} new, {updated_count} updated, {unchanged_count} unchanged",
                         extra={
                             "source": source_config.identifier,
+                            "normalized": stats.normalized_count,
+                            "filtered": stats.filtered_count,
+                            "filter_reasons": stats.filter_reasons,
                             "new": new_count,
                             "updated": updated_count,
                             "unchanged": unchanged_count,
                         },
                     )
 
-                    # Send notifications
+                    # Send notifications based on mode
                     if matches_to_notify:
-                        try:
-                            logger.info(
-                                f"Sending {len(matches_to_notify)} notifications for {source_config.name}",
-                                extra={
-                                    "source": source_config.identifier,
-                                    "count": len(matches_to_notify),
-                                },
-                            )
+                        if self.app_config.email.notification_mode == NotificationMode.DIGEST:
+                            # Digest mode: defer to a single run-wide digest
+                            digest_matches = matches_to_notify
+                        else:
+                            try:
+                                # Legacy mode: send individual emails per job
+                                logger.info(
+                                    f"Sending {len(matches_to_notify)} individual notifications for {source_config.name}",
+                                    extra={
+                                        "source": source_config.identifier,
+                                        "count": len(matches_to_notify),
+                                        "notification_mode": "legacy",
+                                    },
+                                )
 
-                            results = self.notification_service.send_notifications(
-                                matches_to_notify,
-                                self.env_config,
-                                self.app_config.email,
-                                alert_repo,
-                            )
+                                results = self.notification_service.send_notifications(
+                                    matches_to_notify,
+                                    self.env_config,
+                                    self.app_config.email,
+                                    alert_repo,
+                                )
 
-                            # Tally notification results
-                            for result in results:
-                                if result.is_success():
-                                    stats.notified_count += 1
-                                    stats.alerts_sent += 1
-                                elif result.error:
-                                    stats.error_count += 1
+                                # Tally notification results
+                                for result in results:
+                                    if result.is_success():
+                                        stats.notified_count += 1
+                                        stats.alerts_sent += 1
+                                    elif result.error:
+                                        stats.error_count += 1
 
-                            # Explicitly commit to persist alert records
-                            session.commit()
+                                logger.info(
+                                    f"Notification results: {stats.notified_count} sent",
+                                    extra={
+                                        "source": source_config.identifier,
+                                        "sent": stats.notified_count,
+                                        "alerts_recorded": stats.alerts_sent,
+                                    },
+                                )
 
-                            logger.info(
-                                f"Notification results: {stats.notified_count} sent",
-                                extra={
-                                    "source": source_config.identifier,
-                                    "sent": stats.notified_count,
-                                    "alerts_recorded": stats.alerts_sent,
-                                },
-                            )
+                                # Explicitly commit to persist alert records
+                                session.commit()
 
-                        except Exception as e:
-                            # Log notification failure but don't fail the whole source
-                            stats.had_errors = True
-                            stats.error_count += 1
-                            logger.error(
-                                f"Notification error for {source_config.name}: {e}",
-                                extra={
-                                    "source": source_config.identifier,
-                                    "error": str(e),
-                                },
-                                exc_info=True,
-                            )
+                            except Exception as e:
+                                # Log notification failure but don't fail the whole source
+                                stats.had_errors = True
+                                stats.error_count += 1
+                                logger.error(
+                                    f"Notification error for {source_config.name}: {e}",
+                                    extra={
+                                        "source": source_config.identifier,
+                                        "error": str(e),
+                                    },
+                                    exc_info=True,
+                                )
 
                     # Session commits automatically on context exit if no exception
 
@@ -406,4 +537,4 @@ class ScanPipeline:
                     },
                 )
 
-        return stats
+        return stats, digest_matches

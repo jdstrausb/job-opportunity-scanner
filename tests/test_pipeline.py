@@ -23,6 +23,7 @@ from app.config.models import (
     AppConfig,
     EmailConfig,
     LoggingConfig,
+    NotificationMode,
     SearchCriteria,
     SourceConfig,
 )
@@ -116,18 +117,18 @@ def sample_raw_jobs():
     return [
         RawJob(
             external_id="job1",
-            title="Senior Python Engineer",
+            title="Software Engineer",
             company="Tech Corp",
             location="Remote",
-            description="Looking for a senior Python developer",
+            description="Looking for a senior Python developer working remotely",
             url="https://example.com/jobs/1",
             posted_at=None,
         ),
         RawJob(
             external_id="job2",
-            title="Lead Python Developer",
+            title="Software Engineer",
             company="Startup Inc",
-            location="New York",
+            location="Remote",
             description="Leading role for Python expert",
             url="https://example.com/jobs/2",
             posted_at=None,
@@ -315,6 +316,8 @@ class TestScanPipeline:
             "SMTP connection failed"
         )
 
+        app_config.email.notification_mode = NotificationMode.LEGACY
+
         pipeline = ScanPipeline(
             app_config=app_config,
             env_config=env_config,
@@ -453,6 +456,8 @@ class TestScanPipeline:
         ]
         mock_notification_service.send_notifications.return_value = notification_results
 
+        app_config.email.notification_mode = NotificationMode.LEGACY
+
         pipeline = ScanPipeline(
             app_config=app_config,
             env_config=env_config,
@@ -471,6 +476,141 @@ class TestScanPipeline:
             assert result.total_notified == 4
             assert result.alerts_sent == 4
             assert not result.had_errors
+
+    @staticmethod
+    def _per_source_adapter(jobs_by_source):
+        """Build a get_adapter side_effect returning distinct jobs per source."""
+
+        def side_effect(source_config, advanced_config):
+            adapter = Mock()
+            adapter.fetch_jobs.return_value = jobs_by_source[source_config.identifier]
+            return adapter
+
+        return side_effect
+
+    def test_run_once_sends_single_global_digest_across_sources(
+        self,
+        temp_database,
+        app_config,
+        env_config,
+        mock_notification_service,
+        keyword_matcher,
+        sample_raw_jobs,
+    ):
+        """Digest mode sends one combined digest for all sources."""
+        app_config.email.notification_mode = NotificationMode.DIGEST
+        mock_notification_service.send_digest.return_value = NotificationResult(
+            job_key="digest", version_hash="v", attempts=1, status="sent"
+        )
+        pipeline = ScanPipeline(
+            app_config=app_config,
+            env_config=env_config,
+            notification_service=mock_notification_service,
+            keyword_matcher=keyword_matcher,
+        )
+
+        with patch("app.pipeline.runner.get_adapter") as mock_get_adapter:
+            mock_get_adapter.side_effect = self._per_source_adapter(
+                {"test1": [sample_raw_jobs[0]], "test2": [sample_raw_jobs[1]]}
+            )
+            result = pipeline.run_once()
+
+        assert mock_notification_service.send_digest.call_count == 1
+        candidates = mock_notification_service.send_digest.call_args.args[0]
+        assert len(candidates) == 2
+        mock_notification_service.send_notifications.assert_not_called()
+        assert [s.notified_count for s in result.source_stats] == [1, 1]
+        assert [s.alerts_sent for s in result.source_stats] == [1, 1]
+        assert result.total_notified == 2
+        assert result.alerts_sent == 2
+        assert not result.had_errors
+
+    def test_run_once_digest_empty_when_no_matches(
+        self,
+        temp_database,
+        app_config,
+        env_config,
+        mock_notification_service,
+        keyword_matcher,
+    ):
+        """No digest is sent when nothing matches."""
+        app_config.email.notification_mode = NotificationMode.DIGEST
+        pipeline = ScanPipeline(
+            app_config=app_config,
+            env_config=env_config,
+            notification_service=mock_notification_service,
+            keyword_matcher=keyword_matcher,
+        )
+
+        with patch("app.pipeline.runner.get_adapter") as mock_get_adapter:
+            mock_adapter = Mock()
+            mock_adapter.fetch_jobs.return_value = []
+            mock_get_adapter.return_value = mock_adapter
+            result = pipeline.run_once()
+
+        mock_notification_service.send_digest.assert_not_called()
+        assert result.total_notified == 0
+
+    def test_run_once_digest_failure_flags_error_without_discarding_jobs(
+        self,
+        temp_database,
+        app_config,
+        env_config,
+        mock_notification_service,
+        keyword_matcher,
+        sample_raw_jobs,
+    ):
+        """A digest exception is recorded but persisted jobs remain."""
+        from app.persistence.database import get_session
+        from app.persistence.repositories import JobRepository
+
+        app_config.email.notification_mode = NotificationMode.DIGEST
+        mock_notification_service.send_digest.side_effect = Exception("SMTP down")
+        pipeline = ScanPipeline(
+            app_config=app_config,
+            env_config=env_config,
+            notification_service=mock_notification_service,
+            keyword_matcher=keyword_matcher,
+        )
+
+        with patch("app.pipeline.runner.get_adapter") as mock_get_adapter:
+            mock_get_adapter.side_effect = self._per_source_adapter(
+                {"test1": [sample_raw_jobs[0]], "test2": [sample_raw_jobs[1]]}
+            )
+            result = pipeline.run_once()
+
+        assert result.had_errors
+        assert result.total_errors >= 1
+        assert result.total_notified == 0
+        with get_session() as session:
+            assert len(JobRepository(session).get_by_source("greenhouse", "test1")) == 1
+
+    def test_run_once_legacy_mode_sends_per_job_notifications(
+        self,
+        temp_database,
+        app_config,
+        env_config,
+        mock_notification_service,
+        keyword_matcher,
+        sample_raw_jobs,
+    ):
+        """Legacy mode keeps per-source send_notifications and never sends a digest."""
+        app_config.email.notification_mode = NotificationMode.LEGACY
+        pipeline = ScanPipeline(
+            app_config=app_config,
+            env_config=env_config,
+            notification_service=mock_notification_service,
+            keyword_matcher=keyword_matcher,
+        )
+
+        with patch("app.pipeline.runner.get_adapter") as mock_get_adapter:
+            mock_get_adapter.side_effect = self._per_source_adapter(
+                {"test1": [sample_raw_jobs[0]], "test2": [sample_raw_jobs[1]]}
+            )
+            pipeline.run_once()
+
+        assert mock_notification_service.send_notifications.call_count == 2
+        mock_notification_service.send_digest.assert_not_called()
 
 
 class TestPipelineRunResult:
