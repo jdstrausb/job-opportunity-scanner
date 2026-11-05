@@ -22,6 +22,7 @@ class EnvironmentConfig:
         smtp_sender_name: Optional[str] = None,
         log_level: Optional[str] = None,
         database_url: Optional[str] = None,
+        serpapi_api_key: Optional[str] = None,
     ):
         """Initialize environment configuration."""
         self.smtp_host = smtp_host
@@ -32,6 +33,7 @@ class EnvironmentConfig:
         self.smtp_sender_name = smtp_sender_name or "Job Opportunity Scanner"
         self.log_level = log_level
         self.database_url = database_url or "sqlite:///./data/job_scanner.db"
+        self.serpapi_api_key = serpapi_api_key
 
 
 def load_environment_config() -> EnvironmentConfig:
@@ -49,6 +51,7 @@ def load_environment_config() -> EnvironmentConfig:
     - SMTP_SENDER_NAME: Display name for email sender
     - LOG_LEVEL: Override log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
     - DATABASE_URL: SQLite database URL (default: sqlite:///./data/job_scanner.db)
+    - SERPAPI_API_KEY: SerpAPI key for search discovery (blank is treated as unset)
 
     Returns:
         EnvironmentConfig object with validated values
@@ -69,6 +72,7 @@ def load_environment_config() -> EnvironmentConfig:
     smtp_sender_name = os.getenv("SMTP_SENDER_NAME")
     log_level = os.getenv("LOG_LEVEL")
     database_url = os.getenv("DATABASE_URL")
+    serpapi_api_key = (os.getenv("SERPAPI_API_KEY") or "").strip() or None
 
     # Validate required variables
     if not smtp_host:
@@ -135,6 +139,11 @@ def load_environment_config() -> EnvironmentConfig:
             ],
         )
 
+    # Validation above guarantees these are set; narrow types for mypy
+    assert smtp_host is not None
+    assert smtp_port is not None
+    assert alert_to_email is not None
+
     return EnvironmentConfig(
         smtp_host=smtp_host,
         smtp_port=smtp_port,
@@ -144,6 +153,7 @@ def load_environment_config() -> EnvironmentConfig:
         smtp_sender_name=smtp_sender_name,
         log_level=log_level,
         database_url=database_url,
+        serpapi_api_key=serpapi_api_key,
     )
 
 

@@ -304,6 +304,27 @@ class TestEnvironmentVariables:
         assert env_config.log_level == "DEBUG"
 
 
+    def test_serpapi_api_key_defaults_to_none_when_unset(self, mock_env_vars, monkeypatch):
+        """SERPAPI_API_KEY is optional and defaults to None."""
+        monkeypatch.delenv("SERPAPI_API_KEY", raising=False)
+
+        assert load_environment_config().serpapi_api_key is None
+
+    def test_serpapi_api_key_loaded_from_env(self, mock_env_vars, monkeypatch):
+        """SERPAPI_API_KEY is loaded and trimmed."""
+        monkeypatch.setenv("SERPAPI_API_KEY", "  my-key-123  ")
+
+        assert load_environment_config().serpapi_api_key == "my-key-123"
+
+    def test_serpapi_api_key_whitespace_normalized_to_none(self, mock_env_vars, monkeypatch):
+        """Blank or whitespace-only SERPAPI_API_KEY becomes None."""
+        monkeypatch.setenv("SERPAPI_API_KEY", "   ")
+        assert load_environment_config().serpapi_api_key is None
+
+        monkeypatch.setenv("SERPAPI_API_KEY", "")
+        assert load_environment_config().serpapi_api_key is None
+
+
 class TestConfigurationHelpers:
     """Test configuration helper methods."""
 
