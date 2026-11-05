@@ -16,6 +16,7 @@ Public API:
     - JobRepository: CRUD operations for jobs
     - SourceRepository: CRUD operations for source status tracking
     - AlertRepository: CRUD operations for alert records
+    - DismissedItemRepository: CRUD operations for dismissed jobs/companies/sources
 
     # Exceptions
     - PersistenceError: Base exception for all persistence errors
@@ -40,7 +41,13 @@ Example usage:
 from .database import close_database, get_engine, get_session, init_database
 
 # Repository classes
-from .repositories import AlertRepository, JobRepository, SourceRepository
+from .repositories import (
+    AlertRepository,
+    DismissedItemRepository,
+    JobRepository,
+    SourceRepository,
+)
+from .schema import DismissedItemModel
 
 # Exceptions
 from .exceptions import (
@@ -61,6 +68,8 @@ __all__ = [
     "JobRepository",
     "SourceRepository",
     "AlertRepository",
+    "DismissedItemRepository",
+    "DismissedItemModel",
     # Exceptions
     "PersistenceError",
     "DatabaseConnectionError",

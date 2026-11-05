@@ -13,7 +13,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.types import JSON
 
-from app.domain.models import AlertRecord, Job, SourceStatus
+from app.domain.models import AlertRecord, DismissalScope, DismissedItem, Job, SourceStatus
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +222,59 @@ class AlertRecordModel(Base):
             job_key=alert_record.job_key,
             version_hash=alert_record.version_hash,
             sent_at=_format_datetime(alert_record.sent_at),
+        )
+
+
+class DismissedItemModel(Base):
+    """ORM model for dismissed_items table.
+
+    Stores persistent job, company, and source mutes.
+    """
+
+    __tablename__ = "dismissed_items"
+
+    # Composite primary key
+    item_key = Column(String(255), primary_key=True, nullable=False)
+    scope = Column(String(50), primary_key=True, nullable=False)
+
+    reason = Column(Text, nullable=True)
+
+    # Timestamp (stored as ISO 8601 string)
+    dismissed_at = Column(String(50), nullable=False)
+
+    # Indexes
+    __table_args__ = (Index("idx_dismissed_scope_key", "scope", "item_key"),)
+
+    def to_domain(self) -> DismissedItem:
+        """Convert ORM model to domain model.
+
+        Returns:
+            DismissedItem: Domain model instance
+        """
+        dismissed_at = _parse_datetime(self.dismissed_at)
+        assert dismissed_at is not None
+        return DismissedItem(
+            item_key=self.item_key,
+            scope=DismissalScope(self.scope),
+            reason=self.reason,
+            dismissed_at=dismissed_at,
+        )
+
+    @classmethod
+    def from_domain(cls, item: DismissedItem) -> "DismissedItemModel":
+        """Create ORM model from domain model.
+
+        Args:
+            item: Domain model instance
+
+        Returns:
+            DismissedItemModel: ORM model instance
+        """
+        return cls(
+            item_key=item.item_key,
+            scope=item.scope.value,
+            reason=item.reason,
+            dismissed_at=_format_datetime(item.dismissed_at),
         )
 
 

@@ -13,6 +13,7 @@ from app.persistence import (
     AlertRepository,
     DatabaseConnectionError,
     DataIntegrityError,
+    DismissedItemRepository,
     JobRepository,
     PersistenceError,
     RecordNotFoundError,
@@ -721,6 +722,91 @@ class TestAlertRepository:
             alerts = repo.get_alerts_for_job("job1")
 
         assert len(alerts) == 0
+
+
+class TestDismissedItemRepository:
+    """Tests for DismissedItemRepository."""
+
+    @pytest.fixture(autouse=True)
+    def setup_database(self):
+        """Setup test database before each test."""
+        init_database("sqlite:///:memory:")
+        yield
+        close_database()
+
+    def test_dismiss_and_is_dismissed_across_scopes(self):
+        """Dismissals by job, company (case-insensitive) and source all match."""
+        job = create_test_job()
+
+        with get_session() as session:
+            repo = DismissedItemRepository(session)
+            assert repo.is_dismissed(job) == (False, None)
+
+        with get_session() as session:
+            DismissedItemRepository(session).dismiss(job.job_key, scope="job")
+        with get_session() as session:
+            hit, item = DismissedItemRepository(session).is_dismissed(job)
+        assert hit is True
+        assert item is not None and item.scope.value == "job"
+
+        other = create_test_job(external_id="other", source_identifier="elsewhere")
+        with get_session() as session:
+            DismissedItemRepository(session).dismiss("  EXAMPLE CORP ", scope="company")
+        with get_session() as session:
+            hit, item = DismissedItemRepository(session).is_dismissed(other)
+        assert hit is True
+        assert item is not None
+        assert item.scope.value == "company"
+        assert item.item_key == "example corp"
+
+        third = create_test_job(external_id="third", source_identifier="muted-src").model_copy(
+            update={"company": "Zed"}
+        )
+        with get_session() as session:
+            repo = DismissedItemRepository(session)
+            assert repo.is_dismissed(third)[0] is False
+            repo.dismiss("Muted-Src", scope="source")
+        with get_session() as session:
+            hit, item = DismissedItemRepository(session).is_dismissed(third)
+        assert hit is True
+        assert item is not None and item.scope.value == "source"
+
+    def test_dismiss_idempotent_and_undismiss(self):
+        """Repeated dismiss updates reason/timestamp; undismiss removes the record."""
+        first = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        second = datetime(2026, 2, 1, tzinfo=timezone.utc)
+
+        with get_session() as session:
+            repo = DismissedItemRepository(session)
+            repo.dismiss("abc", reason="first", dismissed_at=first)
+            updated = repo.dismiss("ABC", reason="second", dismissed_at=second)
+
+        assert updated.reason == "second"
+        assert updated.dismissed_at == second
+
+        with get_session() as session:
+            repo = DismissedItemRepository(session)
+            items = repo.list_all()
+            assert len(items) == 1
+            assert items[0].reason == "second"
+            assert repo.undismiss("abc") is True
+            assert repo.undismiss("abc") is False
+            assert repo.list_all() == []
+
+    def test_list_all_filter_by_scope(self):
+        """list_all optionally filters by scope."""
+        with get_session() as session:
+            repo = DismissedItemRepository(session)
+            repo.dismiss("j1", scope="job")
+            repo.dismiss("c1", scope="company")
+            repo.dismiss("s1", scope="source")
+
+        with get_session() as session:
+            repo = DismissedItemRepository(session)
+            assert len(repo.list_all()) == 3
+            companies = repo.list_all(scope="company")
+            assert [i.item_key for i in companies] == ["c1"]
+            assert [i.item_key for i in repo.list_all(scope="source")] == ["s1"]
 
 
 # Helper functions for creating test fixtures

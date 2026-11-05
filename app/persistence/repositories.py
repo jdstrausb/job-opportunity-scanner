@@ -9,14 +9,15 @@ import logging
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.domain.models import AlertRecord, Job, SourceStatus
+from app.domain.models import AlertRecord, DismissalScope, DismissedItem, Job, SourceStatus
 
 from .exceptions import DataIntegrityError, PersistenceError, RecordNotFoundError
-from .schema import AlertRecordModel, JobModel, SourceStatusModel
+from .schema import AlertRecordModel, DismissedItemModel, JobModel, SourceStatusModel
+from app.utils.timestamps import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -576,3 +577,156 @@ class AlertRepository:
         except SQLAlchemyError as e:
             logger.error(f"Error cleaning up old alerts: {e}", exc_info=True)
             raise PersistenceError(f"Failed to cleanup old alerts: {e}") from e
+
+
+class DismissedItemRepository:
+    """Repository for persistent job/company/source dismissals."""
+
+    def __init__(self, session: Session):
+        """Initialize repository with database session.
+
+        Args:
+            session: SQLAlchemy session for database operations
+        """
+        self.session = session
+
+    def dismiss(
+        self,
+        item_key: str,
+        scope: "str | DismissalScope" = "job",
+        reason: Optional[str] = None,
+        dismissed_at: Optional[datetime] = None,
+    ) -> DismissedItem:
+        """Dismiss an item (idempotent upsert of reason and dismissed_at).
+
+        Args:
+            item_key: Job key, company name, or source identifier (normalized)
+            scope: "job", "company", or "source"
+            reason: Optional reason
+            dismissed_at: Dismissal time (defaults to now, UTC)
+
+        Returns:
+            Persisted DismissedItem
+
+        Raises:
+            ValueError: If the scope is invalid
+            PersistenceError: If database error occurs
+        """
+        item = DismissedItem(
+            item_key=item_key,
+            scope=DismissalScope(scope),
+            reason=reason,
+            dismissed_at=dismissed_at or utc_now(),
+        )
+        try:
+            existing = self.session.get(
+                DismissedItemModel,
+                {"item_key": item.item_key, "scope": item.scope.value},
+            )
+            if existing is not None:
+                existing.reason = item.reason
+                existing.dismissed_at = DismissedItemModel.from_domain(item).dismissed_at
+                self.session.flush()
+                return existing.to_domain()
+
+            model = DismissedItemModel.from_domain(item)
+            self.session.add(model)
+            self.session.flush()
+            return model.to_domain()
+        except SQLAlchemyError as e:
+            logger.error(f"Error dismissing {item.scope.value} {item.item_key}: {e}", exc_info=True)
+            raise PersistenceError(f"Failed to dismiss item: {e}") from e
+
+    def undismiss(self, item_key: str, scope: "str | DismissalScope" = "job") -> bool:
+        """Remove a dismissal.
+
+        Args:
+            item_key: Key to un-dismiss (normalized)
+            scope: "job", "company", or "source"
+
+        Returns:
+            True if a record was deleted, False if absent
+
+        Raises:
+            PersistenceError: If database error occurs
+        """
+        key = item_key.strip().lower()
+        scope_value = DismissalScope(scope).value
+        try:
+            result = self.session.execute(
+                delete(DismissedItemModel).where(
+                    DismissedItemModel.item_key == key,
+                    DismissedItemModel.scope == scope_value,
+                )
+            )
+            self.session.flush()
+            return bool(result.rowcount)  # type: ignore[attr-defined]
+        except SQLAlchemyError as e:
+            logger.error(f"Error undismissing {scope_value} {key}: {e}", exc_info=True)
+            raise PersistenceError(f"Failed to undismiss item: {e}") from e
+
+    def is_dismissed(self, job: Job) -> "tuple[bool, Optional[DismissedItem]]":
+        """Check whether a job, its company, or its source is dismissed.
+
+        Uses a single query with OR across the three scopes. If several match,
+        the most specific one wins (job, then company, then source).
+
+        Args:
+            job: Job to check
+
+        Returns:
+            Tuple of (is_dismissed, matching DismissedItem or None)
+
+        Raises:
+            PersistenceError: If database error occurs
+        """
+        keys = {
+            DismissalScope.JOB.value: job.job_key.strip().lower(),
+            DismissalScope.COMPANY.value: (job.company or "").strip().lower(),
+            DismissalScope.SOURCE.value: (job.source_identifier or "").strip().lower(),
+        }
+        try:
+            stmt = select(DismissedItemModel).where(
+                or_(
+                    *[
+                        and_(DismissedItemModel.scope == scope, DismissedItemModel.item_key == key)
+                        for scope, key in keys.items()
+                        if key
+                    ]
+                )
+            )
+            matches = {m.scope: m for m in self.session.execute(stmt).scalars().all()}
+            for scope in (
+                DismissalScope.JOB.value,
+                DismissalScope.COMPANY.value,
+                DismissalScope.SOURCE.value,
+            ):
+                if scope in matches:
+                    return True, matches[scope].to_domain()
+            return False, None
+        except SQLAlchemyError as e:
+            logger.error(f"Error checking dismissal for job {job.job_key}: {e}", exc_info=True)
+            raise PersistenceError(f"Failed to check dismissal: {e}") from e
+
+    def list_all(self, scope: "Optional[str | DismissalScope]" = None) -> List[DismissedItem]:
+        """List dismissals, optionally filtered by scope.
+
+        Args:
+            scope: Optional scope filter
+
+        Returns:
+            Dismissed items ordered by scope then key
+
+        Raises:
+            PersistenceError: If database error occurs
+        """
+        try:
+            stmt = select(DismissedItemModel).order_by(
+                DismissedItemModel.scope, DismissedItemModel.item_key
+            )
+            if scope is not None:
+                stmt = stmt.where(DismissedItemModel.scope == DismissalScope(scope).value)
+            return [m.to_domain() for m in self.session.execute(stmt).scalars().all()]
+        except SQLAlchemyError as e:
+            logger.error(f"Error listing dismissed items: {e}", exc_info=True)
+            raise PersistenceError(f"Failed to list dismissed items: {e}") from e

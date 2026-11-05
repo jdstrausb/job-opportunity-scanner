@@ -19,7 +19,12 @@ from app.matching.models import CandidateMatch
 from app.normalization.service import JobNormalizer
 from app.notifications.service import NotificationService
 from app.persistence.database import get_session
-from app.persistence.repositories import AlertRepository, JobRepository, SourceRepository
+from app.persistence.repositories import (
+    AlertRepository,
+    DismissedItemRepository,
+    JobRepository,
+    SourceRepository,
+)
 from app.utils.timestamps import utc_now
 
 from .models import PipelineRunResult, SourceRunStats
@@ -290,6 +295,7 @@ class ScanPipeline:
                     job_repo = JobRepository(session)
                     alert_repo = AlertRepository(session)
                     source_repo = SourceRepository(session)
+                    dismissed_repo = DismissedItemRepository(session)
 
                     # Initialize normalizer with shared scan timestamp
                     normalizer = JobNormalizer(job_repo, scan_timestamp=scan_timestamp)
@@ -368,6 +374,32 @@ class ScanPipeline:
                             # Normalize the job
                             norm_result = normalizer.normalize(raw_job, source_config)
                             stats.normalized_count += 1
+
+                            # Drop dismissed jobs/companies/sources before filtering,
+                            # persistence, or matching
+                            is_dismissed, dismissed_item = dismissed_repo.is_dismissed(
+                                norm_result.job
+                            )
+                            if is_dismissed and dismissed_item is not None:
+                                scope = (
+                                    dismissed_item.scope.value
+                                    if hasattr(dismissed_item.scope, "value")
+                                    else dismissed_item.scope
+                                )
+                                reason_key = f"dismissed_{scope}"
+                                stats.filtered_count += 1
+                                stats.filter_reasons[reason_key] = (
+                                    stats.filter_reasons.get(reason_key, 0) + 1
+                                )
+                                logger.debug(
+                                    f"Job dismissed: {norm_result.job.title}",
+                                    extra={
+                                        "job_key": norm_result.job.job_key,
+                                        "filter_reason": reason_key,
+                                        "dismissed_item_key": dismissed_item.item_key,
+                                    },
+                                )
+                                continue
 
                             # Apply filtering before persistence
                             filter_result = self.filtering_service.evaluate_job(

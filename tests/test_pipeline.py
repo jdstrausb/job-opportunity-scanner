@@ -175,6 +175,57 @@ class TestScanPipeline:
             assert len(result.source_stats) == 2  # Only enabled sources
             assert not result.had_errors
 
+    def test_run_once_skips_dismissed_jobs_and_companies(
+        self,
+        temp_database,
+        app_config,
+        env_config,
+        mock_notification_service,
+        keyword_matcher,
+        sample_raw_jobs,
+    ):
+        """Dismissed job keys and companies are dropped before upsert/match/alert."""
+        from app.persistence.database import get_session
+        from app.persistence.repositories import DismissedItemRepository, JobRepository
+        from app.utils.hashing import compute_job_key
+
+        dismissed_key = compute_job_key("greenhouse", "test1", "job1")
+        with get_session() as session:
+            repo = DismissedItemRepository(session)
+            repo.dismiss(dismissed_key, scope="job")
+            repo.dismiss("Startup Inc", scope="company")
+
+        pipeline = ScanPipeline(
+            app_config=app_config,
+            env_config=env_config,
+            notification_service=mock_notification_service,
+            keyword_matcher=keyword_matcher,
+        )
+
+        with patch("app.pipeline.runner.get_adapter") as mock_get_adapter:
+            mock_adapter = Mock()
+            mock_adapter.fetch_jobs.return_value = sample_raw_jobs
+            mock_get_adapter.return_value = mock_adapter
+            result = pipeline.run_once()
+
+        by_source = {s.source_id: s for s in result.source_stats}
+        # test1: job1 dismissed by key, job2 dismissed by company
+        assert by_source["test1"].filtered_count == 2
+        assert by_source["test1"].upserted_count == 0
+        assert by_source["test1"].filter_reasons == {
+            "dismissed_job": 1,
+            "dismissed_company": 1,
+        }
+        # test2: only job2 (company Startup Inc) dismissed
+        assert by_source["test2"].filtered_count == 1
+        assert by_source["test2"].upserted_count == 1
+        assert by_source["test2"].filter_reasons == {"dismissed_company": 1}
+
+        with get_session() as session:
+            job_repo = JobRepository(session)
+            assert job_repo.get_by_key(dismissed_key) is None
+            assert len(job_repo.get_by_source("greenhouse", "test1")) == 0
+
     def test_run_once_skips_disabled_sources(
         self,
         temp_database,

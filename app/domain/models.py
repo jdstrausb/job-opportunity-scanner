@@ -8,7 +8,8 @@ This module defines the data structures used throughout the application:
 """
 
 from datetime import datetime
-from typing import Optional
+from enum import Enum
+from typing import List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -29,6 +30,11 @@ class RawJob(BaseModel):
     url: str = Field(..., description="Direct link to the job posting")
     posted_at: Optional[datetime] = Field(None, description="When job was posted (UTC)")
     updated_at: Optional[datetime] = Field(None, description="When job was last updated (UTC)")
+    secondary_locations: List[str] = Field(
+        default_factory=list, description="Additional location strings from ATS"
+    )
+    is_remote: Optional[bool] = Field(None, description="Explicit remote flag from ATS")
+    location_country: Optional[str] = Field(None, description="Primary location country")
 
     @field_validator("external_id", "title", "company", "description", "url")
     @classmethod
@@ -106,6 +112,11 @@ class Job(BaseModel):
     content_hash: str = Field(
         ..., description="Hash of title + description + location for change detection"
     )
+    secondary_locations: List[str] = Field(
+        default_factory=list, description="Additional location strings from ATS"
+    )
+    is_remote: Optional[bool] = Field(None, description="Explicit remote flag from ATS")
+    location_country: Optional[str] = Field(None, description="Primary location country")
 
     @field_validator("source_type")
     @classmethod
@@ -231,3 +242,40 @@ class SourceStatus(BaseModel):
         "last_error_at": None,
         "error_message": None,
     }}}
+
+
+class DismissalScope(str, Enum):
+    """What a dismissal applies to."""
+
+    JOB = "job"
+    COMPANY = "company"
+    SOURCE = "source"
+
+
+class DismissedItem(BaseModel):
+    """A persistent user mute for a job, company, or source.
+
+    item_key is stored stripped and lowercase: the job_key for JOB scope, the
+    company name for COMPANY scope, or the source identifier for SOURCE scope.
+    """
+
+    item_key: str = Field(..., description="Normalized (stripped, lowercase) key being muted")
+    scope: DismissalScope = Field(DismissalScope.JOB, description="What the key refers to")
+    reason: Optional[str] = Field(None, description="Optional reason for the dismissal")
+    dismissed_at: datetime = Field(..., description="When the item was dismissed (UTC)")
+
+    @field_validator("item_key")
+    @classmethod
+    def normalize_item_key(cls, v: str) -> str:
+        """Normalize key to stripped lowercase."""
+        return v.strip().lower()
+
+    @field_validator("dismissed_at")
+    @classmethod
+    def ensure_utc(cls, v: datetime) -> datetime:
+        """Ensure datetime is timezone-aware and in UTC."""
+        from datetime import timezone
+
+        if v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v.astimezone(timezone.utc)
