@@ -135,6 +135,11 @@ def load_environment_config() -> EnvironmentConfig:
             ],
         )
 
+    # Presence was validated above; narrow Optional types for the type checker
+    assert smtp_host is not None
+    assert smtp_port is not None
+    assert alert_to_email is not None
+
     return EnvironmentConfig(
         smtp_host=smtp_host,
         smtp_port=smtp_port,

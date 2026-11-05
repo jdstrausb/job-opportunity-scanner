@@ -1,7 +1,7 @@
 """Configuration schema models using Pydantic."""
 
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -129,6 +129,62 @@ class SearchCriteria(BaseModel):
         return self
 
 
+class SearchProfile(SearchCriteria):
+    """A named search track: keyword rules plus affinity scoring settings."""
+
+    name: str = Field(..., min_length=1, description="Unique profile track name")
+    enabled: bool = Field(True, description="Whether this search profile is active")
+    affinity_weights: Dict[str, float] = Field(
+        default_factory=dict,
+        description="Term-to-weight mapping for affinity scoring",
+    )
+    title_boost_multiplier: float = Field(
+        2.0,
+        ge=1.0,
+        le=10.0,
+        description="Multiplier when matched terms appear in job title",
+    )
+    min_affinity_score: float = Field(
+        0.0,
+        ge=0.0,
+        description="Minimum affinity score required to trigger a match",
+    )
+
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, v: str) -> str:
+        """Strip whitespace from the profile name."""
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("Profile name cannot be empty or whitespace-only")
+        return stripped
+
+    @field_validator("affinity_weights", mode="after")
+    @classmethod
+    def normalize_affinity_weights(cls, v: Dict[str, float]) -> Dict[str, float]:
+        """Normalize weight keys: strip whitespace and lowercase; drop empty keys."""
+        normalized: Dict[str, float] = {}
+        for term, weight in v.items():
+            key = term.strip().lower()
+            if not key:
+                continue
+            if key in normalized:
+                raise ValueError(f"Duplicate affinity_weights term after normalization: {key}")
+            normalized[key] = weight
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_affinity_weights_vs_exclusions(self):
+        """Reject terms that are both weighted and excluded."""
+        conflicts = set(self.affinity_weights) & set(self.exclude_terms)
+        if conflicts:
+            raise ValueError(
+                f"Profile '{self.name}': terms cannot be in both affinity_weights and "
+                f"exclude_terms: {', '.join(sorted(conflicts))}"
+            )
+        return self
+
+
 class EmailConfig(BaseModel):
     """Email notification settings."""
 
@@ -186,14 +242,27 @@ class AppConfig(BaseModel):
     sources: List[SourceConfig] = Field(
         ..., min_length=1, description="List of job sources to monitor"
     )
-    search_criteria: SearchCriteria = Field(..., description="Keyword matching rules")
+    search_criteria: Optional[SearchCriteria] = Field(
+        None,
+        description="Keyword matching rules (legacy single track; derived from "
+        "search_profiles when omitted)",
+    )
+    search_profiles: List[SearchProfile] = Field(
+        default_factory=list,
+        description="Named multi-track search profiles",
+    )
     scan_interval: str = Field("15m", description="Polling interval for scanning jobs")
-    email: EmailConfig = Field(default_factory=EmailConfig, description="Email settings")
+    email: EmailConfig = Field(
+        default_factory=EmailConfig,  # type: ignore[arg-type]
+        description="Email settings",
+    )
     logging: LoggingConfig = Field(
-        default_factory=LoggingConfig, description="Logging configuration"
+        default_factory=LoggingConfig,  # type: ignore[arg-type]
+        description="Logging configuration"
     )
     advanced: AdvancedConfig = Field(
-        default_factory=AdvancedConfig, description="Advanced runtime settings"
+        default_factory=AdvancedConfig,  # type: ignore[arg-type]
+        description="Advanced runtime settings"
     )
 
     # Computed field
@@ -230,6 +299,24 @@ class AppConfig(BaseModel):
                 )
             seen_sources.add(source_key)
 
+        # Search profiles: names must be unique
+        seen_names = set()
+        for profile in self.search_profiles:
+            if profile.name in seen_names:
+                raise ValueError(f"Duplicate search profile name: '{profile.name}'")
+            seen_names.add(profile.name)
+
+        # Require either legacy search_criteria or at least one enabled profile
+        enabled_profiles = [p for p in self.search_profiles if p.enabled]
+        if self.search_criteria is None:
+            if not enabled_profiles:
+                raise ValueError(
+                    "Configuration must define search_criteria or at least one enabled "
+                    "entry in search_profiles"
+                )
+            # Legacy callers read search_criteria; mirror the first enabled profile
+            self.search_criteria = enabled_profiles[0]
+
         # Compute scan interval in seconds
         try:
             self.scan_interval_seconds = parse_duration(self.scan_interval)
@@ -239,6 +326,19 @@ class AppConfig(BaseModel):
             raise ValueError(f"Failed to parse scan_interval: {e}") from e
 
         return self
+
+    def get_effective_profiles(self) -> List[SearchProfile]:
+        """Return the enabled search profiles to evaluate.
+
+        Configs that only define the legacy ``search_criteria`` yield a single
+        synthesized ``"default"`` profile.
+        """
+        enabled = [p for p in self.search_profiles if p.enabled]
+        if enabled:
+            return enabled
+        if self.search_criteria is None:  # pragma: no cover - guarded by validator
+            return []
+        return [SearchProfile(name="default", **self.search_criteria.model_dump())]
 
     def get_enabled_sources(self) -> List[SourceConfig]:
         """Get list of enabled sources."""

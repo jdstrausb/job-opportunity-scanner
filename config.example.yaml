@@ -47,6 +47,58 @@ search_criteria:
     - "on-site"
     - "relocation-required"
 
+# Multi-track search profiles (optional alternative to `search_criteria`)
+# Define either `search_criteria` (single track, above) or `search_profiles`.
+# A config with only `search_criteria` behaves as one profile named "default".
+# A config with only `search_profiles` uses its first enabled profile as the
+# legacy `search_criteria`. Profile names must be unique.
+#
+# Each profile accepts the same required_terms / keyword_groups / exclude_terms
+# as `search_criteria`, plus:
+#   enabled                - set false to skip the profile (default: true)
+#   affinity_weights       - term -> weight for scoring; keys are lowercased and
+#                            must not also appear in the profile's exclude_terms
+#   title_boost_multiplier - weight multiplier when a term is in the job title
+#                            (1.0 - 10.0, default: 2.0)
+#   min_affinity_score     - minimum score required to match (default: 0.0)
+#
+# search_profiles:
+#   - name: "backend_rails"
+#     required_terms: ["rails"]
+#     keyword_groups:
+#       - ["remote", "distributed"]
+#     exclude_terms: ["junior", "intern"]
+#     affinity_weights:
+#       rails: 3.0
+#       postgresql: 1.5
+#       sidekiq: 1.0
+#     title_boost_multiplier: 2.0
+#     min_affinity_score: 3.0
+#
+#   - name: "scholarly_open_science"
+#     keyword_groups:
+#       - ["open science", "scholarly communication", "research infrastructure"]
+#     exclude_terms: ["sales"]
+#     affinity_weights:
+#       "open science": 3.0
+#       "scholarly communication": 2.5
+#       metadata: 1.0
+#       "open access": 1.5
+#     title_boost_multiplier: 1.5
+#     min_affinity_score: 2.0
+#
+#   - name: "backend_python"
+#     required_terms: ["python"]
+#     keyword_groups:
+#       - ["backend", "back-end", "api"]
+#     exclude_terms: ["django", "intern"]
+#     affinity_weights:
+#       fastapi: 2.0
+#       sqlalchemy: 1.5
+#       postgresql: 1.0
+#     title_boost_multiplier: 2.0
+#     min_affinity_score: 2.0
+
 # Email notification configuration
 # Note: Email credentials should be set via environment variables:
 # - SMTP_HOST (required)
