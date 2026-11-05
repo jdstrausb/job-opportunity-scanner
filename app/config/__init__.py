@@ -12,6 +12,7 @@ from .models import (
     LogLevel,
     LoggingConfig,
     SearchCriteria,
+    SearchProfile,
     SourceConfig,
 )
 
@@ -24,6 +25,7 @@ __all__ = [
     "AppConfig",
     "SourceConfig",
     "SearchCriteria",
+    "SearchProfile",
     "EmailConfig",
     "LoggingConfig",
     "AdvancedConfig",

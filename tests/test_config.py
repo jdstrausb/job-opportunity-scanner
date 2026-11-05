@@ -355,3 +355,125 @@ def mock_env_vars(monkeypatch):
     monkeypatch.setenv("SMTP_USER", "user@test.com")
     monkeypatch.setenv("SMTP_PASS", "testpass123")
     monkeypatch.setenv("ALERT_TO_EMAIL", "test@example.com")
+
+
+class TestSearchProfilesConfig:
+    """Test multi-track search_profiles schema and backwards compatibility."""
+
+    SOURCES = [{"name": "Acme", "type": "greenhouse", "identifier": "acme"}]
+
+    def _profile(self, name, **overrides):
+        data = {"name": name, "required_terms": ["python"]}
+        data.update(overrides)
+        return data
+
+    def _config(self, **kwargs):
+        from app.config.models import AppConfig
+
+        return AppConfig(sources=self.SOURCES, **kwargs)
+
+    def test_legacy_search_criteria_synthesizes_default_profile(self):
+        config = self._config(
+            search_criteria={
+                "required_terms": ["Python"],
+                "keyword_groups": [["remote", "hybrid"]],
+                "exclude_terms": ["php"],
+            }
+        )
+
+        profiles = config.get_effective_profiles()
+
+        assert len(profiles) == 1
+        profile = profiles[0]
+        assert profile.name == "default"
+        assert profile.enabled is True
+        assert profile.required_terms == config.search_criteria.required_terms
+        assert profile.keyword_groups == config.search_criteria.keyword_groups
+        assert profile.exclude_terms == config.search_criteria.exclude_terms
+        assert profile.affinity_weights == {}
+
+    def test_multi_track_search_profiles_parses_and_populates_legacy_criteria(self):
+        config = self._config(
+            search_profiles=[
+                self._profile("track_a", required_terms=["ruby"]),
+                self._profile("track_b", required_terms=["python"]),
+            ]
+        )
+
+        assert [p.name for p in config.get_effective_profiles()] == ["track_a", "track_b"]
+        assert config.search_criteria is not None
+        assert config.search_criteria.required_terms == ["ruby"]
+        assert config.search_criteria is config.search_profiles[0]
+
+    def test_legacy_criteria_populated_from_first_enabled_profile(self):
+        config = self._config(
+            search_profiles=[
+                self._profile("off", required_terms=["ruby"], enabled=False),
+                self._profile("on", required_terms=["python"]),
+            ]
+        )
+
+        assert config.search_criteria.required_terms == ["python"]
+        assert [p.name for p in config.get_effective_profiles()] == ["on"]
+
+    def test_missing_criteria_and_profiles_rejected(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="search_criteria"):
+            self._config()
+
+    def test_only_disabled_profiles_rejected(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="search_criteria"):
+            self._config(search_profiles=[self._profile("off", enabled=False)])
+
+    def test_search_profiles_unique_names_enforced(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="Duplicate search profile"):
+            self._config(
+                search_profiles=[self._profile("dup"), self._profile("dup")]
+            )
+
+    def test_affinity_weights_keys_normalized(self):
+        config = self._config(
+            search_profiles=[
+                self._profile("a", affinity_weights={"  Rails ": 2.0, "PostgreSQL": 1.5})
+            ]
+        )
+
+        assert config.search_profiles[0].affinity_weights == {
+            "rails": 2.0,
+            "postgresql": 1.5,
+        }
+
+    def test_affinity_weights_conflict_with_exclude_terms_rejected(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="affinity_weights.*exclude_terms|rails"):
+            self._config(
+                search_profiles=[
+                    self._profile(
+                        "a",
+                        affinity_weights={"Rails": 2.0},
+                        exclude_terms=["rails"],
+                    )
+                ]
+            )
+
+    def test_profile_defaults(self):
+        profile = self._config(search_profiles=[self._profile("a")]).search_profiles[0]
+
+        assert profile.enabled is True
+        assert profile.title_boost_multiplier == 2.0
+        assert profile.min_affinity_score == 0.0
+        assert profile.affinity_weights == {}
+
+    def test_title_boost_multiplier_range_enforced(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            self._config(
+                search_profiles=[self._profile("a", title_boost_multiplier=0.5)]
+            )
