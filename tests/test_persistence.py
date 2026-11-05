@@ -99,6 +99,43 @@ class TestDatabaseInitialization:
         close_database()
 
 
+    def test_create_schema_migrates_missing_job_columns(self, tmp_path):
+        """create_schema adds missing location columns to a legacy jobs table."""
+        from sqlalchemy import create_engine, inspect
+
+        from app.persistence.schema import create_schema
+
+        engine = create_engine(f"sqlite:///{tmp_path / 'legacy.db'}")
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE jobs (job_key VARCHAR(64) PRIMARY KEY NOT NULL, "
+                    "source_type VARCHAR(50) NOT NULL, source_identifier VARCHAR(255) NOT NULL, "
+                    "external_id VARCHAR(255) NOT NULL, title TEXT NOT NULL, "
+                    "company VARCHAR(255) NOT NULL, location VARCHAR(255), "
+                    "description TEXT NOT NULL, url TEXT NOT NULL, posted_at VARCHAR(50), "
+                    "updated_at VARCHAR(50), first_seen_at VARCHAR(50) NOT NULL, "
+                    "last_seen_at VARCHAR(50) NOT NULL, content_hash VARCHAR(64) NOT NULL)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO jobs VALUES ('k1','greenhouse','acme','1','T','C',NULL,"
+                    "'D','http://x',NULL,NULL,'2025-01-01T00:00:00Z','2025-01-01T00:00:00Z','h')"
+                )
+            )
+
+        create_schema(engine)
+        create_schema(engine)  # idempotent
+
+        cols = {c["name"] for c in inspect(engine).get_columns("jobs")}
+        assert {"secondary_locations", "is_remote", "location_country"} <= cols
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT job_key, is_remote FROM jobs")).fetchall()
+        assert [tuple(r) for r in row] == [("k1", None)]
+        engine.dispose()
+
+
 class TestSessionManagement:
     """Tests for session management."""
 
@@ -378,6 +415,24 @@ class TestJobRepository:
 
         assert found_job.title == "Updated Title"
         assert found_job.description == "Updated description"
+
+    def test_upsert_updates_location_metadata(self):
+        """Re-upserting a changed job updates location metadata."""
+        job = create_test_job()
+        with get_session() as session:
+            JobRepository(session).upsert(job)
+
+        job.secondary_locations = ["Remote - US", "Philadelphia, PA"]
+        job.is_remote = False
+        job.location_country = "USA"
+        with get_session() as session:
+            JobRepository(session).upsert(job)
+
+        with get_session() as session:
+            model = session.get(JobModel, job.job_key)
+            assert model.secondary_locations == ["Remote - US", "Philadelphia, PA"]
+            assert model.is_remote is False
+            assert model.location_country == "USA"
 
     def test_update_last_seen_updates_timestamp_only(self):
         """Test update_last_seen updates timestamp only."""

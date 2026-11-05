@@ -129,6 +129,11 @@ class JobRepository:
                 existing.first_seen_at = job.first_seen_at.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
                 existing.last_seen_at = job.last_seen_at.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
                 existing.content_hash = job.content_hash
+                existing.secondary_locations = (
+                    job.secondary_locations if job.secondary_locations else None
+                )
+                existing.is_remote = job.is_remote
+                existing.location_country = job.location_country
 
                 self.session.flush()
                 return existing.to_domain()

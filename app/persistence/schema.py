@@ -8,9 +8,10 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Column, Index, MetaData, String, Text
+from sqlalchemy import Boolean, Column, Index, MetaData, String, Text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import declarative_base
+from sqlalchemy.types import JSON
 
 from app.domain.models import AlertRecord, Job, SourceStatus
 
@@ -53,6 +54,11 @@ class JobModel(Base):
     # Change detection
     content_hash = Column(String(64), nullable=False)
 
+    # Location metadata for filtering
+    secondary_locations = Column(JSON, nullable=True)
+    is_remote = Column(Boolean, nullable=True)
+    location_country = Column(String(255), nullable=True)
+
     # Indexes
     __table_args__ = (
         Index("idx_jobs_source", "source_type", "source_identifier"),
@@ -81,6 +87,9 @@ class JobModel(Base):
             first_seen_at=_parse_datetime(self.first_seen_at),
             last_seen_at=_parse_datetime(self.last_seen_at),
             content_hash=self.content_hash,
+            secondary_locations=self.secondary_locations if self.secondary_locations is not None else [],
+            is_remote=self.is_remote,
+            location_country=self.location_country,
         )
 
     @classmethod
@@ -108,6 +117,9 @@ class JobModel(Base):
             first_seen_at=_format_datetime(job.first_seen_at),
             last_seen_at=_format_datetime(job.last_seen_at),
             content_hash=job.content_hash,
+            secondary_locations=job.secondary_locations if job.secondary_locations else None,
+            is_remote=job.is_remote,
+            location_country=job.location_country,
         )
 
 
@@ -262,6 +274,32 @@ def _parse_datetime(dt_str: Optional[str]) -> Optional[datetime]:
     return dt.replace(tzinfo=timezone.utc)
 
 
+_JOBS_MIGRATION_COLUMNS = {
+    "secondary_locations": "JSON",
+    "is_remote": "BOOLEAN",
+    "location_country": "VARCHAR(255)",
+}
+
+
+def _ensure_table_columns(engine: Engine) -> None:
+    """Idempotently add missing nullable location columns to a legacy jobs table.
+
+    Args:
+        engine: SQLAlchemy engine instance
+    """
+    from sqlalchemy import inspect, text
+
+    existing = {col["name"] for col in inspect(engine).get_columns("jobs")}
+    missing = {n: t for n, t in _JOBS_MIGRATION_COLUMNS.items() if n not in existing}
+    if not missing:
+        return
+
+    with engine.begin() as conn:
+        for name, sql_type in missing.items():
+            logger.info(f"Adding missing column jobs.{name}")
+            conn.execute(text(f"ALTER TABLE jobs ADD COLUMN {name} {sql_type}"))
+
+
 def create_schema(engine: Engine) -> None:
     """Create all tables and indexes if they don't exist (idempotent).
 
@@ -276,6 +314,9 @@ def create_schema(engine: Engine) -> None:
     try:
         # Create all tables defined in Base
         Base.metadata.create_all(engine, checkfirst=True)
+
+        # Add columns introduced after the table was first created
+        _ensure_table_columns(engine)
 
         # Log created tables
         from sqlalchemy import inspect
