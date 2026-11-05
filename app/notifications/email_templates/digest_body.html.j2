@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 700px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            margin: 0 0 10px 0;
+            font-size: 28px;
+        }
+        .header .meta {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+        .summary {
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 6px;
+            margin-bottom: 30px;
+            border-left: 4px solid #667eea;
+        }
+        .summary-stat {
+            display: inline-block;
+            margin-right: 20px;
+            font-size: 16px;
+        }
+        .summary-stat strong {
+            color: #667eea;
+            font-size: 24px;
+        }
+        .company-section {
+            margin-bottom: 40px;
+            border-bottom: 2px solid #e9ecef;
+            padding-bottom: 20px;
+        }
+        .company-section:last-child {
+            border-bottom: none;
+        }
+        .company-header {
+            background-color: #f8f9fa;
+            padding: 15px 20px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+        .company-name {
+            font-size: 22px;
+            font-weight: 600;
+            color: #1a1a1a;
+            margin-bottom: 5px;
+        }
+        .company-meta {
+            font-size: 14px;
+            color: #666;
+        }
+        .job-item {
+            padding: 15px;
+            margin-bottom: 10px;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            background-color: #fff;
+        }
+        .job-item:hover {
+            background-color: #f8f9fa;
+        }
+        .job-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #1a1a1a;
+            margin-bottom: 8px;
+        }
+        .job-title a {
+            color: #667eea;
+            text-decoration: none;
+        }
+        .job-title a:hover {
+            text-decoration: underline;
+        }
+        .job-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 10px;
+        }
+        .job-meta-item {
+            display: flex;
+            align-items: center;
+        }
+        .match-quality {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .match-quality-perfect {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .match-quality-partial {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .match-quality-excluded {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .match-quality-no-match {
+            background-color: #e2e3e5;
+            color: #383d41;
+        }
+        .match-reason {
+            font-size: 14px;
+            color: #495057;
+            margin: 8px 0;
+            padding-left: 12px;
+            border-left: 3px solid #dee2e6;
+        }
+        .matched-terms {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 8px;
+        }
+        .matched-term {
+            background-color: #e7f3ff;
+            color: #004085;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 2px solid #e9ecef;
+            font-size: 12px;
+            color: #666;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎯 Job Opportunities Digest</h1>
+            <div class="meta">
+                Scan Date: {{ scan_date[:10] }} • Scan ID: {{ scan_id[:8] }}
+            </div>
+        </div>
+
+        <div class="summary">
+            <div class="summary-stat">
+                <strong>{{ total_matches }}</strong>
+                <span>Match{{ 'es' if total_matches != 1 else '' }}</span>
+            </div>
+            <div class="summary-stat">
+                <strong>{{ total_companies }}</strong>
+                <span>Compan{{ 'ies' if total_companies != 1 else 'y' }}</span>
+            </div>
+        </div>
+
+        {% for company in companies %}
+        <div class="company-section">
+            <div class="company-header">
+                <div class="company-name">{{ company.name }}</div>
+                <div class="company-meta">
+                    {{ company.job_count }} position{{ 's' if company.job_count != 1 else '' }}
+                    {% if company.most_recent_date %}
+                    • Most recent: {{ company.most_recent_date[:10] }}
+                    {% endif %}
+                </div>
+            </div>
+
+            {% for job in company.jobs %}
+            <div class="job-item">
+                <div class="job-title">
+                    <a href="{{ job.url }}" target="_blank">{{ job.title }}</a>
+                </div>
+
+                <div class="job-meta">
+                    <div class="job-meta-item">📍 {{ job.location }}</div>
+                    {% if job.posted_at %}
+                    <div class="job-meta-item">📅 {{ job.posted_at[:10] }}</div>
+                    {% endif %}
+                    <div class="job-meta-item">
+                        <span class="match-quality match-quality-{{ job.match_quality }}">
+                            {{ job.match_quality }} match
+                        </span>
+                    </div>
+                </div>
+
+                {% if job.match_summary %}
+                <div class="match-reason">{{ job.match_summary }}</div>
+                {% endif %}
+
+                {% if job.matched_terms %}
+                <div class="matched-terms">
+                    {% for term in job.matched_terms %}
+                    <span class="matched-term">{{ term }}</span>
+                    {% endfor %}
+                </div>
+                {% endif %}
+
+                <div class="job-dismiss" style="font-size: 11px; color: #888; font-family: monospace;">Key: {{ job.job_key[:12] }} &bull; Dismiss: <code>job-scanner --dismiss {{ job.job_key }}</code></div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endfor %}
+
+        <div class="footer">
+            <p>This digest was generated by Job Opportunity Scanner.</p>
+            <p>Configure your search criteria to refine results.</p>
+        </div>
+    </div>
+</body>
+</html>

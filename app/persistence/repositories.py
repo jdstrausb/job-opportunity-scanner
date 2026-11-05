@@ -695,7 +695,9 @@ class DismissedItemRepository:
                     ]
                 )
             )
-            matches = {m.scope: m for m in self.session.execute(stmt).scalars().all()}
+            matches: "dict[str, DismissedItemModel]" = {
+                str(m.scope): m for m in self.session.execute(stmt).scalars().all()
+            }
             for scope in (
                 DismissalScope.JOB.value,
                 DismissalScope.COMPANY.value,

@@ -384,3 +384,85 @@ class TestMain:
         mock_load_config.assert_called_once()
         call_args = mock_load_config.call_args[0]
         assert call_args[1] == "DEBUG"  # log_level_override
+
+
+class TestDismissCLI:
+    """Tests for dismissal management CLI flags (no SMTP/config required)."""
+
+    @pytest.fixture(autouse=True)
+    def cli_env(self, tmp_path, monkeypatch):
+        """Point DATABASE_URL at a temp DB and strip SMTP configuration."""
+        db_url = f"sqlite:///{tmp_path / 'dismiss.db'}"
+        monkeypatch.setenv("DATABASE_URL", db_url)
+        for var in ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "ALERT_TO_EMAIL"):
+            monkeypatch.delenv(var, raising=False)
+        self.db_url = db_url
+        yield
+        from app.persistence.database import close_database
+
+        close_database()
+
+    def _run(self, *argv):
+        with patch("sys.argv", ["job-scanner", *argv]):
+            return main()
+
+    def _items(self, scope=None):
+        from app.persistence.database import close_database, get_session, init_database
+        from app.persistence.repositories import DismissedItemRepository
+
+        close_database()
+        init_database(self.db_url)
+        with get_session() as session:
+            return DismissedItemRepository(session).list_all(scope=scope)
+
+    def test_cli_dismiss_job_key_default_scope(self):
+        from app.domain.models import DismissalScope
+
+        assert self._run("--dismiss", "ABC123def") == 0
+        items = self._items()
+        assert len(items) == 1
+        assert items[0].item_key == "abc123def"
+        assert items[0].scope == DismissalScope.JOB
+
+    def test_cli_dismiss_scoped_prefix(self):
+        from app.domain.models import DismissalScope
+
+        code = self._run(
+            "--dismiss", "company:acme-corp", "--dismiss-reason", "Recruiter spam"
+        )
+        assert code == 0
+        items = self._items()
+        assert len(items) == 1
+        assert items[0].item_key == "acme-corp"
+        assert items[0].scope == DismissalScope.COMPANY
+        assert items[0].reason == "Recruiter spam"
+
+    def test_cli_dismiss_invalid_scope_exits_1(self, capsys):
+        assert self._run("--dismiss", "bogus:thing") == 1
+        assert "scope" in capsys.readouterr().err.lower()
+        assert self._items() == []
+
+    def test_cli_list_dismissed(self, capsys):
+        assert self._run("--list-dismissed") == 0
+        assert "No dismissed items" in capsys.readouterr().out
+
+        self._run("--dismiss", "source:acme", "--dismiss-reason", "noisy")
+        self._run("--dismiss", "company:Foo Inc")
+        capsys.readouterr()
+
+        assert self._run("--list-dismissed") == 0
+        out = capsys.readouterr().out
+        assert "SCOPE" in out and "KEY" in out
+        assert "source" in out and "acme" in out and "noisy" in out
+        assert "company" in out and "foo inc" in out
+
+    def test_cli_undismiss(self, capsys):
+        self._run("--dismiss", "company:acme-corp")
+        capsys.readouterr()
+
+        assert self._run("--undismiss", "company:acme-corp") == 0
+        assert "Removed" in capsys.readouterr().out
+        assert self._items() == []
+
+        assert self._run("--undismiss", "company:acme-corp") == 0
+        assert "not found" in capsys.readouterr().out.lower()

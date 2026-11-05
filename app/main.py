@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
 from app.config.duration import parse_duration, validate_duration_range
 from app.config.environment import EnvironmentConfig
@@ -23,7 +23,9 @@ from app.logging.config import configure_logging
 from app.logging.context import log_context
 from app.matching.engine import KeywordMatcher
 from app.notifications.service import NotificationService
-from app.persistence.database import close_database, init_database
+from app.domain.models import DismissalScope
+from app.persistence.database import close_database, get_session, init_database
+from app.persistence.repositories import DismissedItemRepository
 from app.pipeline import ScanPipeline
 from app.scheduler import SchedulerService
 
@@ -78,6 +80,107 @@ def load_runtime_config(
     return app_config, env_config
 
 
+def parse_dismissal_target(target: str) -> Tuple[DismissalScope, str]:
+    """
+    Parse a dismissal target into (scope, key).
+
+    Accepts "<job_key>" (defaults to job scope) or "<scope>:<key>" where scope
+    is one of job, company, or source. Only the first colon separates the scope,
+    so keys may themselves contain colons.
+
+    Raises:
+        ValueError: If the scope prefix is not valid or the key is empty.
+    """
+    target = target.strip()
+    if ":" in target:
+        prefix, key = target.split(":", 1)
+        try:
+            scope = DismissalScope(prefix.strip().lower())
+        except ValueError:
+            valid = ", ".join(s.value for s in DismissalScope)
+            raise ValueError(f"Invalid scope '{prefix}' (expected one of: {valid})") from None
+    else:
+        scope, key = DismissalScope.JOB, target
+
+    key = key.strip()
+    if not key:
+        raise ValueError("Dismissal target must not be empty")
+    return scope, key
+
+
+def handle_dismissal_commands(args: argparse.Namespace) -> Optional[int]:
+    """
+    Run dismissal management commands if any dismissal flag was given.
+
+    Resolves DATABASE_URL directly so no SMTP credentials or config file are
+    required.
+
+    Returns:
+        Exit code if a dismissal command was handled, otherwise None.
+    """
+    if not (args.dismiss or args.undismiss or args.list_dismissed):
+        return None
+
+    if args.dismiss_reason and not args.dismiss:
+        print("Error: --dismiss-reason requires --dismiss", file=sys.stderr)
+        return 1
+
+    try:
+        dismiss_target = parse_dismissal_target(args.dismiss) if args.dismiss else None
+        undismiss_target = parse_dismissal_target(args.undismiss) if args.undismiss else None
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    database_url = os.getenv("DATABASE_URL", "sqlite:///./data/job_scanner.db")
+    try:
+        init_database(database_url)
+        with get_session() as session:
+            repo = DismissedItemRepository(session)
+
+            if dismiss_target:
+                scope, key = dismiss_target
+                item = repo.dismiss(key, scope=scope, reason=args.dismiss_reason)
+                print(f"Dismissed {item.scope.value}: {item.item_key}")
+
+            if undismiss_target:
+                scope, key = undismiss_target
+                if repo.undismiss(key, scope=scope):
+                    print(f"Removed dismissal {scope.value}: {key.lower()}")
+                else:
+                    print(f"Dismissal not found: {scope.value}: {key.lower()}")
+
+            if args.list_dismissed:
+                items = repo.list_all()
+                if not items:
+                    print("No dismissed items.")
+                else:
+                    rows = [
+                        (
+                            i.scope.value,
+                            i.item_key,
+                            i.dismissed_at.strftime("%Y-%m-%d %H:%M"),
+                            i.reason or "",
+                        )
+                        for i in items
+                    ]
+                    headers = ("SCOPE", "KEY", "DISMISSED (UTC)", "REASON")
+                    widths = [
+                        max(len(headers[c]), *(len(r[c]) for r in rows)) for c in range(4)
+                    ]
+                    fmt = "  ".join(f"{{:<{w}}}" for w in widths)
+                    print(fmt.format(*headers).rstrip())
+                    print(fmt.format(*("-" * w for w in widths)).rstrip())
+                    for row in rows:
+                        print(fmt.format(*row).rstrip())
+        return 0
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    finally:
+        close_database()
+
+
 def main() -> int:
     """
     Main entry point for the Job Opportunity Scanner.
@@ -106,8 +209,36 @@ def main() -> int:
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         help="Log level (overrides config and environment)",
     )
+    parser.add_argument(
+        "--dismiss",
+        metavar="TARGET",
+        default=None,
+        help="Dismiss a job, company, or source: <job_key>, job:<key>, company:<name>, or source:<id>",
+    )
+    parser.add_argument(
+        "--dismiss-reason",
+        metavar="TEXT",
+        default=None,
+        help="Optional reason to store with --dismiss",
+    )
+    parser.add_argument(
+        "--undismiss",
+        metavar="TARGET",
+        default=None,
+        help="Remove a dismissal (same TARGET format as --dismiss)",
+    )
+    parser.add_argument(
+        "--list-dismissed",
+        action="store_true",
+        help="List all active dismissals and exit",
+    )
 
     args = parser.parse_args()
+
+    # Dismissal management runs standalone: no config, SMTP, or scan required
+    dismissal_exit_code = handle_dismissal_commands(args)
+    if dismissal_exit_code is not None:
+        return dismissal_exit_code
 
     try:
         # Step 1: Load configuration early (before logging for format detection)
