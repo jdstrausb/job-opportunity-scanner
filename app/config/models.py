@@ -1,7 +1,7 @@
 """Configuration schema models using Pydantic."""
 
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -31,6 +31,13 @@ class LogFormat(str, Enum):
 
     JSON = "json"
     KEY_VALUE = "key-value"
+
+
+class NotificationMode(str, Enum):
+    """Notification delivery modes."""
+
+    DIGEST = "digest"
+    LEGACY = "legacy"
 
 
 class SourceConfig(BaseModel):
@@ -70,8 +77,16 @@ class SearchCriteria(BaseModel):
         default_factory=list,
         description="Jobs containing any of these terms are filtered out",
     )
+    boundary_terms: List[str] = Field(
+        default_factory=list,
+        description="Terms that require word-boundary matches to avoid false positives (e.g., 'rails' to avoid 'guardrails')",
+    )
+    contextual_terms: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description="Terms that require context terms to be present for a match (e.g., {'rails': ['ruby']} means 'rails' only counts if 'ruby' is also present)",
+    )
 
-    @field_validator("required_terms", "exclude_terms")
+    @field_validator("required_terms", "exclude_terms", "boundary_terms")
     @classmethod
     def normalize_terms(cls, v: List[str]) -> List[str]:
         """Normalize terms: strip whitespace, convert to lowercase, remove empty strings."""
@@ -97,6 +112,19 @@ class SearchCriteria(BaseModel):
             if normalized_group:
                 normalized_groups.append(normalized_group)
         return normalized_groups
+
+    @field_validator("contextual_terms")
+    @classmethod
+    def normalize_contextual_terms(cls, v: Dict[str, List[str]]) -> Dict[str, List[str]]:
+        """Normalize contextual terms: normalize keys and values to lowercase."""
+        normalized = {}
+        for key, values in v.items():
+            key_normalized = key.strip().lower()
+            if key_normalized:
+                normalized[key_normalized] = [
+                    val.strip().lower() for val in values if val.strip()
+                ]
+        return normalized
 
     @model_validator(mode="after")
     def validate_search_criteria(self):
@@ -142,6 +170,12 @@ class EmailConfig(BaseModel):
     retry_initial_delay: int = Field(
         5, ge=1, le=60, description="Initial retry delay in seconds"
     )
+    notification_mode: NotificationMode = Field(
+        NotificationMode.DIGEST,
+        description="Notification delivery mode: digest (single email per source) or legacy (per-job emails)"
+    )
+
+    model_config = {"use_enum_values": True}
 
 
 class LoggingConfig(BaseModel):
@@ -180,6 +214,231 @@ class AdvancedConfig(BaseModel):
         return stripped
 
 
+class FilteringRules(BaseModel):
+    """Job filtering rules applied before keyword matching."""
+
+    max_job_age_days: int = Field(
+        180,
+        ge=1,
+        le=730,
+        description="Maximum age in days for jobs (based on publishedAt or updatedAt)"
+    )
+
+    use_updated_at_fallback: bool = Field(
+        True,
+        description="Fall back to updatedAt if publishedAt is missing"
+    )
+
+    treat_recent_update_as_fresh: bool = Field(
+        True,
+        description="Treat jobs with recent updatedAt as fresh even if publishedAt is old"
+    )
+
+    require_remote: bool = Field(
+        True,
+        description="Filter out non-remote jobs"
+    )
+
+    remote_synonyms: List[str] = Field(
+        default_factory=lambda: [
+            "remote",
+            "remote - us",
+            "remote (us)",
+            "remote us",
+            "remote - usa",
+            "remote usa",
+            "remote - united states",
+            "remote united states",
+            "work from home",
+            "wfh",
+            "anywhere",
+            "hybrid"
+        ],
+        description="Location strings considered as remote-acceptable (case-insensitive)"
+    )
+
+    acceptable_countries: List[str] = Field(
+        default_factory=lambda: [
+            "united states",
+            "us",
+            "usa",
+            "u.s.",
+            "u.s.a."
+        ],
+        description="Primary location countries that are acceptable (case-insensitive)"
+    )
+
+    # Remote region filtering
+    remote_allowed_regions: List[str] = Field(
+        default_factory=lambda: ["americas", "us", "usa", "united states"],
+        description="Region tags that indicate acceptable remote locations"
+    )
+
+    remote_blocked_regions: List[str] = Field(
+        default_factory=lambda: ["emea", "apac", "india", "uk", "canada"],
+        description="Region tags that indicate blocked remote locations"
+    )
+
+    allow_remote_canada_if_us_allowed: bool = Field(
+        True,
+        description="Allow Canada remote jobs if posting explicitly allows US applicants"
+    )
+
+    us_eligibility_phrases: List[str] = Field(
+        default_factory=lambda: [
+            "us or canada",
+            "canada or us",
+            "united states or canada",
+            "canada or united states",
+            "open to us applicants",
+            "us applicants welcome",
+            "north america"
+        ],
+        description="Phrases in job description that indicate US applicants are eligible"
+    )
+
+    # Hybrid handling
+    allow_hybrid_cities: List[str] = Field(
+        default_factory=lambda: ["philadelphia, pa", "philadelphia"],
+        description="Cities where hybrid work is acceptable (normalized lowercase)"
+    )
+
+    # Description-based remote detection
+    require_remote_structured: bool = Field(
+        True,
+        description="Require structured remote signals (is_remote flag or location match); if False, allow description fallback"
+    )
+
+    remote_description_keywords: List[str] = Field(
+        default_factory=list,
+        description="Keywords to search in description for remote eligibility (only used if require_remote_structured=False)"
+    )
+
+    # Seniority filtering
+    seniority_block_terms: List[str] = Field(
+        default_factory=lambda: ["senior", "sr", "staff", "principal", "manager", "lead", "director"],
+        description="Title terms that indicate seniority levels to block"
+    )
+
+    seniority_allow_terms: List[str] = Field(
+        default_factory=list,
+        description="Title terms that override seniority blocking (e.g., 'junior senior' to allow specific cases)"
+    )
+
+    # Experience filtering
+    max_years_experience: int = Field(
+        8,
+        ge=0,
+        le=20,
+        description="Maximum years of experience to accept (soft threshold)"
+    )
+
+    hard_block_years: int = Field(
+        9,
+        ge=0,
+        le=25,
+        description="Hard block threshold - jobs requiring this many years or more are rejected"
+    )
+
+    # Role family filtering
+    role_allow_terms: List[str] = Field(
+        default_factory=lambda: ["developer", "engineer", "engineering"],
+        description="Title terms that indicate allowed role families"
+    )
+
+    role_block_terms: List[str] = Field(
+        default_factory=lambda: [
+            "recruiter", "hr", "human resources", "people ops", "people operations",
+            "sales", "account executive", "account manager", "business development",
+            "support", "customer success", "customer service",
+            "compliance", "legal", "counsel", "attorney",
+            "marketing", "content", "copywriter", "designer", "product designer",
+            "analyst", "data analyst", "business analyst",
+            "project manager", "program manager", "scrum master",
+            "qa", "quality assurance", "tester"
+        ],
+        description="Title terms that indicate blocked role families"
+    )
+
+    # Feature toggles
+    enable_seniority_filter: bool = Field(
+        True,
+        description="Enable seniority-based filtering"
+    )
+
+    enable_role_filter: bool = Field(
+        True,
+        description="Enable role family filtering"
+    )
+
+    enable_experience_filter: bool = Field(
+        True,
+        description="Enable years-of-experience filtering"
+    )
+
+    # Company / industry domain filtering
+    enable_domain_filter: bool = Field(
+        True,
+        description="Enable company and industry domain filtering"
+    )
+
+    blocked_companies: List[str] = Field(
+        default_factory=list,
+        description="Company names to block (case-insensitive)"
+    )
+
+    blocked_domains: List[str] = Field(
+        default_factory=list,
+        description="Industry/domain terms or URL hostnames to block (word-boundary matched)"
+    )
+
+    domain_allow_terms: List[str] = Field(
+        default_factory=list,
+        description="Terms that override blocked_domains"
+    )
+
+    @field_validator("remote_synonyms", "acceptable_countries", "remote_allowed_regions",
+                     "remote_blocked_regions", "us_eligibility_phrases", "allow_hybrid_cities",
+                     "remote_description_keywords", "seniority_block_terms", "seniority_allow_terms",
+                     "role_allow_terms", "role_block_terms",
+                     "blocked_companies", "blocked_domains", "domain_allow_terms")
+    @classmethod
+    def normalize_lists(cls, v: List[str]) -> List[str]:
+        """Normalize to lowercase and strip whitespace."""
+        return [term.strip().lower() for term in v if term.strip()]
+
+    @model_validator(mode="after")
+    def validate_filtering_rules(self):
+        """Validate that filtering rules are sensible."""
+        import logging
+        logger = logging.getLogger(__name__)
+
+        if self.require_remote and not self.remote_synonyms:
+            raise ValueError(
+                "require_remote is True but remote_synonyms list is empty"
+            )
+
+        # Warn if max_years_experience is outside typical range
+        if self.max_years_experience < 3:
+            logger.warning(
+                f"max_years_experience is very low ({self.max_years_experience}); "
+                "this may filter out most jobs"
+            )
+        if self.max_years_experience > 12:
+            logger.warning(
+                f"max_years_experience is very high ({self.max_years_experience}); "
+                "this may not effectively filter senior roles"
+            )
+
+        # Ensure hard_block_years >= max_years_experience
+        if self.hard_block_years < self.max_years_experience:
+            raise ValueError(
+                f"hard_block_years ({self.hard_block_years}) must be >= max_years_experience ({self.max_years_experience})"
+            )
+
+        return self
+
+
 class AppConfig(BaseModel):
     """Root configuration object for the Job Opportunity Scanner."""
 
@@ -194,6 +453,9 @@ class AppConfig(BaseModel):
     )
     advanced: AdvancedConfig = Field(
         default_factory=AdvancedConfig, description="Advanced runtime settings"
+    )
+    filtering: FilteringRules = Field(
+        default_factory=FilteringRules, description="Job filtering rules"
     )
 
     # Computed field
