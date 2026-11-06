@@ -23,6 +23,7 @@ from app.config.models import (
     AppConfig,
     EmailConfig,
     LoggingConfig,
+    NotificationMode,
     SearchCriteria,
     SourceConfig,
 )
@@ -116,18 +117,18 @@ def sample_raw_jobs():
     return [
         RawJob(
             external_id="job1",
-            title="Senior Python Engineer",
+            title="Software Engineer",
             company="Tech Corp",
             location="Remote",
-            description="Looking for a senior Python developer",
+            description="Looking for a senior Python developer working remotely",
             url="https://example.com/jobs/1",
             posted_at=None,
         ),
         RawJob(
             external_id="job2",
-            title="Lead Python Developer",
+            title="Software Engineer",
             company="Startup Inc",
-            location="New York",
+            location="Remote",
             description="Leading role for Python expert",
             url="https://example.com/jobs/2",
             posted_at=None,
@@ -173,6 +174,57 @@ class TestScanPipeline:
             assert result.total_upserted == 4
             assert len(result.source_stats) == 2  # Only enabled sources
             assert not result.had_errors
+
+    def test_run_once_skips_dismissed_jobs_and_companies(
+        self,
+        temp_database,
+        app_config,
+        env_config,
+        mock_notification_service,
+        keyword_matcher,
+        sample_raw_jobs,
+    ):
+        """Dismissed job keys and companies are dropped before upsert/match/alert."""
+        from app.persistence.database import get_session
+        from app.persistence.repositories import DismissedItemRepository, JobRepository
+        from app.utils.hashing import compute_job_key
+
+        dismissed_key = compute_job_key("greenhouse", "test1", "job1")
+        with get_session() as session:
+            repo = DismissedItemRepository(session)
+            repo.dismiss(dismissed_key, scope="job")
+            repo.dismiss("Startup Inc", scope="company")
+
+        pipeline = ScanPipeline(
+            app_config=app_config,
+            env_config=env_config,
+            notification_service=mock_notification_service,
+            keyword_matcher=keyword_matcher,
+        )
+
+        with patch("app.pipeline.runner.get_adapter") as mock_get_adapter:
+            mock_adapter = Mock()
+            mock_adapter.fetch_jobs.return_value = sample_raw_jobs
+            mock_get_adapter.return_value = mock_adapter
+            result = pipeline.run_once()
+
+        by_source = {s.source_id: s for s in result.source_stats}
+        # test1: job1 dismissed by key, job2 dismissed by company
+        assert by_source["test1"].filtered_count == 2
+        assert by_source["test1"].upserted_count == 0
+        assert by_source["test1"].filter_reasons == {
+            "dismissed_job": 1,
+            "dismissed_company": 1,
+        }
+        # test2: only job2 (company Startup Inc) dismissed
+        assert by_source["test2"].filtered_count == 1
+        assert by_source["test2"].upserted_count == 1
+        assert by_source["test2"].filter_reasons == {"dismissed_company": 1}
+
+        with get_session() as session:
+            job_repo = JobRepository(session)
+            assert job_repo.get_by_key(dismissed_key) is None
+            assert len(job_repo.get_by_source("greenhouse", "test1")) == 0
 
     def test_run_once_skips_disabled_sources(
         self,
@@ -222,7 +274,7 @@ class TestScanPipeline:
             mock_adapter = Mock()
 
             # First source succeeds, second fails
-            def side_effect(source_config, advanced_config):
+            def side_effect(source_config, advanced_config, env_config=None):
                 if source_config.identifier == "test1":
                     mock_adapter.fetch_jobs.return_value = sample_raw_jobs
                 else:
@@ -250,6 +302,58 @@ class TestScanPipeline:
             assert stats_test2.had_errors
             assert stats_test2.error_count > 0
             assert "API error" in stats_test2.error_message
+
+    def test_source_health_survives_failed_fetch_and_clears_on_recovery(
+        self,
+        temp_database,
+        app_config,
+        env_config,
+        mock_notification_service,
+        keyword_matcher,
+    ):
+        """An adapter error records the failure without erasing last_success_at."""
+        from app.persistence.database import get_session
+        from app.persistence.repositories import SourceRepository
+
+        pipeline = ScanPipeline(
+            app_config=app_config,
+            env_config=env_config,
+            notification_service=mock_notification_service,
+            keyword_matcher=keyword_matcher,
+        )
+
+        def health(identifier):
+            with get_session() as session:
+                return SourceRepository(session).get("greenhouse", identifier)
+
+        with patch("app.pipeline.runner.get_adapter") as mock_get_adapter:
+            ok_adapter = Mock()
+            ok_adapter.fetch_jobs.return_value = []
+            failing_adapter = Mock()
+            failing_adapter.fetch_jobs.side_effect = AdapterHTTPError(
+                "API error", url="http://test.com", status_code=500
+            )
+
+            mock_get_adapter.return_value = ok_adapter
+            pipeline.run_once()
+            first_success = health("test1").last_success_at
+            assert first_success is not None
+
+            mock_get_adapter.return_value = failing_adapter
+            pipeline.run_once()
+            after_failure = health("test1")
+            assert after_failure.last_success_at == first_success
+            assert after_failure.last_error_at is not None
+            assert "API error" in after_failure.error_message
+            assert after_failure.name == "Test Source 1"
+            assert after_failure.source_type == "greenhouse"
+
+            mock_get_adapter.return_value = ok_adapter
+            pipeline.run_once()
+            recovered = health("test1")
+            assert recovered.last_success_at > first_success
+            assert recovered.last_error_at is None
+            assert recovered.error_message is None
 
     def test_run_once_prevents_concurrent_runs(
         self,
@@ -314,6 +418,8 @@ class TestScanPipeline:
         mock_notification_service.send_notifications.side_effect = Exception(
             "SMTP connection failed"
         )
+
+        app_config.email.notification_mode = NotificationMode.LEGACY
 
         pipeline = ScanPipeline(
             app_config=app_config,
@@ -453,6 +559,8 @@ class TestScanPipeline:
         ]
         mock_notification_service.send_notifications.return_value = notification_results
 
+        app_config.email.notification_mode = NotificationMode.LEGACY
+
         pipeline = ScanPipeline(
             app_config=app_config,
             env_config=env_config,
@@ -471,6 +579,214 @@ class TestScanPipeline:
             assert result.total_notified == 4
             assert result.alerts_sent == 4
             assert not result.had_errors
+
+    @staticmethod
+    def _per_source_adapter(jobs_by_source):
+        """Build a get_adapter side_effect returning distinct jobs per source."""
+
+        def side_effect(source_config, advanced_config, env_config=None):
+            adapter = Mock()
+            adapter.fetch_jobs.return_value = jobs_by_source[source_config.identifier]
+            return adapter
+
+        return side_effect
+
+    def test_run_once_sends_single_global_digest_across_sources(
+        self,
+        temp_database,
+        app_config,
+        env_config,
+        mock_notification_service,
+        keyword_matcher,
+        sample_raw_jobs,
+    ):
+        """Digest mode sends one combined digest for all sources."""
+        app_config.email.notification_mode = NotificationMode.DIGEST
+        mock_notification_service.send_digest.return_value = NotificationResult(
+            job_key="digest", version_hash="v", attempts=1, status="sent"
+        )
+        pipeline = ScanPipeline(
+            app_config=app_config,
+            env_config=env_config,
+            notification_service=mock_notification_service,
+            keyword_matcher=keyword_matcher,
+        )
+
+        with patch("app.pipeline.runner.get_adapter") as mock_get_adapter:
+            mock_get_adapter.side_effect = self._per_source_adapter(
+                {"test1": [sample_raw_jobs[0]], "test2": [sample_raw_jobs[1]]}
+            )
+            result = pipeline.run_once()
+
+        assert mock_notification_service.send_digest.call_count == 1
+        candidates = mock_notification_service.send_digest.call_args.args[0]
+        assert len(candidates) == 2
+        mock_notification_service.send_notifications.assert_not_called()
+        assert [s.notified_count for s in result.source_stats] == [1, 1]
+        assert [s.alerts_sent for s in result.source_stats] == [1, 1]
+        assert result.total_notified == 2
+        assert result.alerts_sent == 2
+        assert not result.had_errors
+
+    def test_run_once_digest_empty_when_no_matches(
+        self,
+        temp_database,
+        app_config,
+        env_config,
+        mock_notification_service,
+        keyword_matcher,
+    ):
+        """No digest is sent when nothing matches."""
+        app_config.email.notification_mode = NotificationMode.DIGEST
+        pipeline = ScanPipeline(
+            app_config=app_config,
+            env_config=env_config,
+            notification_service=mock_notification_service,
+            keyword_matcher=keyword_matcher,
+        )
+
+        with patch("app.pipeline.runner.get_adapter") as mock_get_adapter:
+            mock_adapter = Mock()
+            mock_adapter.fetch_jobs.return_value = []
+            mock_get_adapter.return_value = mock_adapter
+            result = pipeline.run_once()
+
+        mock_notification_service.send_digest.assert_not_called()
+        assert result.total_notified == 0
+
+    def test_run_once_digest_failure_flags_error_without_discarding_jobs(
+        self,
+        temp_database,
+        app_config,
+        env_config,
+        mock_notification_service,
+        keyword_matcher,
+        sample_raw_jobs,
+    ):
+        """A digest exception is recorded but persisted jobs remain."""
+        from app.persistence.database import get_session
+        from app.persistence.repositories import JobRepository
+
+        app_config.email.notification_mode = NotificationMode.DIGEST
+        mock_notification_service.send_digest.side_effect = Exception("SMTP down")
+        pipeline = ScanPipeline(
+            app_config=app_config,
+            env_config=env_config,
+            notification_service=mock_notification_service,
+            keyword_matcher=keyword_matcher,
+        )
+
+        with patch("app.pipeline.runner.get_adapter") as mock_get_adapter:
+            mock_get_adapter.side_effect = self._per_source_adapter(
+                {"test1": [sample_raw_jobs[0]], "test2": [sample_raw_jobs[1]]}
+            )
+            result = pipeline.run_once()
+
+        assert result.had_errors
+        assert result.total_errors >= 1
+        assert result.total_notified == 0
+        with get_session() as session:
+            assert len(JobRepository(session).get_by_source("greenhouse", "test1")) == 1
+
+    def test_failed_digest_re_alerts_on_subsequent_run_after_smtp_recovers(
+        self,
+        temp_database,
+        app_config,
+        env_config,
+        mock_notification_service,
+        keyword_matcher,
+        sample_raw_jobs,
+    ):
+        """Matches from a failed digest are re-sent next run, then never again."""
+        from app.persistence.database import get_session
+        from app.persistence.repositories import AlertRepository
+
+        app_config.email.notification_mode = NotificationMode.DIGEST
+        pipeline = ScanPipeline(
+            app_config=app_config,
+            env_config=env_config,
+            notification_service=mock_notification_service,
+            keyword_matcher=keyword_matcher,
+        )
+        adapter_factory = self._per_source_adapter(
+            {"test1": [sample_raw_jobs[0]], "test2": [sample_raw_jobs[1]]}
+        )
+
+        def working_send_digest(candidates, env, email, alert_repo, scan_id):
+            for c in candidates:
+                alert_repo.record_alert(c.job.job_key, c.job.content_hash, utc_now())
+            return NotificationResult(
+                job_key="digest", version_hash="v", attempts=1, status="sent"
+            )
+
+        with patch("app.pipeline.runner.get_adapter") as mock_get_adapter:
+            mock_get_adapter.side_effect = adapter_factory
+
+            # Run 1: SMTP down
+            mock_notification_service.send_digest.return_value = NotificationResult(
+                job_key="digest", version_hash="", attempts=3, status="failed", error="SMTP down"
+            )
+            run1 = pipeline.run_once()
+            assert run1.had_errors
+            with get_session() as session:
+                alert_repo = AlertRepository(session)
+                keys = [
+                    c.job.job_key
+                    for c in mock_notification_service.send_digest.call_args.args[0]
+                ]
+                assert len(keys) == 2
+                assert not any(
+                    alert_repo.has_been_sent(c.job.job_key, c.job.content_hash)
+                    for c in mock_notification_service.send_digest.call_args.args[0]
+                )
+
+            # Run 2: SMTP recovered, jobs unchanged
+            mock_notification_service.send_digest.reset_mock()
+            mock_notification_service.send_digest.side_effect = working_send_digest
+            run2 = pipeline.run_once()
+            assert not run2.had_errors
+            assert mock_notification_service.send_digest.call_count == 1
+            candidates = mock_notification_service.send_digest.call_args.args[0]
+            assert sorted(c.job.job_key for c in candidates) == sorted(keys)
+            assert run2.total_notified == 2
+            with get_session() as session:
+                alert_repo = AlertRepository(session)
+                assert all(
+                    alert_repo.has_been_sent(c.job.job_key, c.job.content_hash)
+                    for c in candidates
+                )
+
+            # Run 3: already alerted, nothing re-sent
+            mock_notification_service.send_digest.reset_mock()
+            pipeline.run_once()
+            mock_notification_service.send_digest.assert_not_called()
+
+    def test_run_once_legacy_mode_sends_per_job_notifications(
+        self,
+        temp_database,
+        app_config,
+        env_config,
+        mock_notification_service,
+        keyword_matcher,
+        sample_raw_jobs,
+    ):
+        """Legacy mode keeps per-source send_notifications and never sends a digest."""
+        app_config.email.notification_mode = NotificationMode.LEGACY
+        pipeline = ScanPipeline(
+            app_config=app_config,
+            env_config=env_config,
+            notification_service=mock_notification_service,
+            keyword_matcher=keyword_matcher,
+        )
+
+        with patch("app.pipeline.runner.get_adapter") as mock_get_adapter:
+            mock_get_adapter.side_effect = self._per_source_adapter(
+                {"test1": [sample_raw_jobs[0]], "test2": [sample_raw_jobs[1]]}
+            )
+            pipeline.run_once()
+
+        assert mock_notification_service.send_notifications.call_count == 2
+        mock_notification_service.send_digest.assert_not_called()
 
 
 class TestPipelineRunResult:
@@ -551,3 +867,212 @@ class TestSourceRunStats:
         assert stats.duration_seconds == 0.0
         assert not stats.had_errors
         assert stats.error_message is None
+
+
+class TestPipelineMatchExplainability:
+    """Match Explainability persistence, alert-safe scans and run-state exposure."""
+
+    @staticmethod
+    def _matcher():
+        from app.config.models import SearchProfile
+
+        return KeywordMatcher(
+            [
+                SearchProfile(
+                    name="py",
+                    required_terms=["python"],
+                    affinity_weights={"python": 2.0, "senior": 3.0},
+                )
+            ]
+        )
+
+    @staticmethod
+    def _raw_job(description="We need a senior Python developer"):
+        return RawJob(
+            external_id="job1",
+            title="Software Engineer",
+            company="Tech Corp",
+            location="Remote",
+            description=description,
+            url="https://example.com/jobs/1",
+            posted_at=None,
+        )
+
+    @staticmethod
+    def _make_pipeline(app_config, env_config, notification_service, matcher=None):
+        app_config.sources = [app_config.sources[0]]
+        app_config.email.notification_mode = NotificationMode.DIGEST
+        return ScanPipeline(
+            app_config=app_config,
+            env_config=env_config,
+            notification_service=notification_service,
+            keyword_matcher=matcher or TestPipelineMatchExplainability._matcher(),
+        )
+
+    @staticmethod
+    def _run(pipeline, raw_jobs, **kwargs):
+        with patch("app.pipeline.runner.get_adapter") as mock_get_adapter:
+            adapter = Mock()
+            adapter.fetch_jobs.return_value = raw_jobs
+            mock_get_adapter.return_value = adapter
+            return pipeline.run_once(**kwargs)
+
+    @staticmethod
+    def _stored(job_key=None):
+        from app.persistence.database import get_session
+        from app.persistence.repositories import JobRepository
+
+        with get_session() as session:
+            repo = JobRepository(session)
+            if job_key is None:
+                jobs = repo.get_by_source("greenhouse", "test1")
+                assert len(jobs) == 1
+                return jobs[0]
+            return repo.get_by_key(job_key)
+
+    def test_run_once_persists_match_explainability_on_jobs_table(
+        self, temp_database, app_config, env_config, mock_notification_service
+    ):
+        pipeline = self._make_pipeline(app_config, env_config, mock_notification_service)
+
+        self._run(pipeline, [self._raw_job()])
+
+        job = self._stored()
+        assert job.is_match is True
+        assert job.primary_profile == "py"
+        assert job.matched_profiles == ["py"]
+        assert job.affinity_score > 0
+        assert job.score_breakdown
+        assert job.match_snippets
+        assert job.matched_fields
+
+    def test_run_once_refreshes_match_metadata_on_unchanged_jobs(
+        self, temp_database, app_config, env_config, mock_notification_service
+    ):
+        from app.config.models import SearchProfile
+        from app.persistence.database import get_session
+        from app.persistence.repositories import JobRepository
+
+        pipeline = self._make_pipeline(app_config, env_config, mock_notification_service)
+        self._run(pipeline, [self._raw_job()])
+        first = self._stored()
+        with get_session() as session:
+            JobRepository(session).update_user_status(first.job_key, "saved")
+
+        # Profiles changed between scans; the job content did not
+        pipeline.keyword_matcher = KeywordMatcher(
+            [SearchProfile(name="renamed", required_terms=["python"], affinity_weights={"python": 9.0})]
+        )
+        original = JobRepository.update_last_seen_and_match
+        with patch.object(
+            JobRepository, "update_last_seen_and_match", autospec=True, side_effect=original
+        ) as spy:
+            result = self._run(pipeline, [self._raw_job()])
+
+        assert spy.call_count == 1
+        assert result.total_upserted == 0
+        second = self._stored()
+        assert second.content_hash == first.content_hash
+        assert second.primary_profile == "renamed"
+        assert second.affinity_score == 9.0
+        assert second.first_seen_at == first.first_seen_at
+        assert second.last_seen_at > first.last_seen_at
+        assert second.user_status.value == "saved"
+
+    def test_run_once_preserves_user_status_when_job_content_changes(
+        self, temp_database, app_config, env_config, mock_notification_service
+    ):
+        from app.domain.models import TriageStatus
+        from app.persistence.database import get_session
+        from app.persistence.repositories import JobRepository
+
+        pipeline = self._make_pipeline(app_config, env_config, mock_notification_service)
+        self._run(pipeline, [self._raw_job("A python developer")])
+        first = self._stored()
+        with get_session() as session:
+            JobRepository(session).update_user_status(first.job_key, "applied")
+
+        self._run(pipeline, [self._raw_job("A senior python developer")])
+
+        second = self._stored()
+        assert second.content_hash != first.content_hash
+        assert second.affinity_score > first.affinity_score
+        assert second.user_status == TriageStatus.APPLIED
+
+    def test_run_once_alert_safe_mode_skips_notifications_and_preserves_digest_retry(
+        self, temp_database, app_config, env_config, mock_notification_service
+    ):
+        from app.persistence.database import get_session
+        from app.persistence.repositories import AlertRepository
+
+        pipeline = self._make_pipeline(app_config, env_config, mock_notification_service)
+
+        def working_send_digest(candidates, env, email, alert_repo, scan_id):
+            for c in candidates:
+                alert_repo.record_alert(c.job.job_key, c.job.content_hash, utc_now())
+            return NotificationResult(
+                job_key="digest", version_hash="v", attempts=1, status="sent"
+            )
+
+        mock_notification_service.send_digest.side_effect = working_send_digest
+
+        # Alert-safe scan: persists and matches, never notifies
+        quiet = self._run(pipeline, [self._raw_job()], send_notifications=False)
+        job = self._stored()
+        assert quiet.total_matched > 0
+        assert quiet.total_notified == 0
+        assert quiet.alerts_sent == 0
+        mock_notification_service.send_digest.assert_not_called()
+        mock_notification_service.send_notifications.assert_not_called()
+        assert job.is_match is True
+        with get_session() as session:
+            assert AlertRepository(session).get_alerts_for_job(job.job_key) == []
+
+        # Scheduled scan: unchanged job is picked up as a Digest Retry
+        loud = self._run(pipeline, [self._raw_job()])
+        assert loud.total_notified == 1
+        assert loud.alerts_sent == 1
+        candidates = mock_notification_service.send_digest.call_args.args[0]
+        assert [c.is_retry for c in candidates] == [True]
+        assert [c.needs_alert for c in candidates] == [True]
+        with get_session() as session:
+            assert AlertRepository(session).has_been_sent(job.job_key, job.content_hash)
+
+    def test_alert_safe_mode_skips_legacy_notifications(
+        self, temp_database, app_config, env_config, mock_notification_service
+    ):
+        pipeline = self._make_pipeline(app_config, env_config, mock_notification_service)
+        app_config.email.notification_mode = NotificationMode.LEGACY
+
+        result = self._run(pipeline, [self._raw_job()], send_notifications=False)
+
+        assert result.total_matched > 0
+        assert result.total_notified == 0
+        mock_notification_service.send_notifications.assert_not_called()
+        mock_notification_service.send_digest.assert_not_called()
+
+    def test_pipeline_tracks_last_run_result_and_is_running_property(
+        self, temp_database, app_config, env_config, mock_notification_service
+    ):
+        pipeline = self._make_pipeline(app_config, env_config, mock_notification_service)
+        assert pipeline.last_run_result is None
+        assert pipeline.is_running is False
+
+        observed = []
+        with patch("app.pipeline.runner.get_adapter") as mock_get_adapter:
+            adapter = Mock()
+
+            def fetch(*args, **kwargs):
+                observed.append(pipeline.is_running)
+                # A concurrent trigger is skipped and must not replace last_run_result
+                observed.append(pipeline.run_once().skipped)
+                return [self._raw_job()]
+
+            adapter.fetch_jobs.side_effect = fetch
+            mock_get_adapter.return_value = adapter
+            result = pipeline.run_once()
+
+        assert observed == [True, True]
+        assert pipeline.is_running is False
+        assert pipeline.last_run_result is result
+        assert result.skipped is False

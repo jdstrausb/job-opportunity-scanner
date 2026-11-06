@@ -48,6 +48,7 @@ data/
 
 # Build artifacts
 build/
+frontend/node_modules/
 dist/
 *.egg-info/
 .eggs/

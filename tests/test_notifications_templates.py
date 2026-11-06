@@ -314,3 +314,40 @@ def test_subject_line_strips_whitespace():
 
     # Subject should not have leading/trailing whitespace
     assert result["subject"] == result["subject"].strip()
+
+
+def test_digest_renders_job_key_and_dismissal_hint():
+    """Digest HTML and text show the job key and a copyable --dismiss command."""
+    job_key = "0123456789abcdef0123456789abcdef"
+    context = {
+        "scan_id": "scan-12345678",
+        "scan_date": "2026-11-05T12:00:00+00:00",
+        "total_matches": 1,
+        "total_companies": 1,
+        "company_name": "Tech Corp",
+        "companies": [
+            {
+                "name": "Tech Corp",
+                "job_count": 1,
+                "most_recent_date": "2026-11-04T09:00:00+00:00",
+                "jobs": [
+                    {
+                        "title": "Python Developer",
+                        "location": "Remote",
+                        "url": "https://example.com/job/1",
+                        "posted_at": "2026-11-04T09:00:00+00:00",
+                        "match_quality": "perfect",
+                        "match_summary": "Matched python",
+                        "matched_terms": ["python"],
+                        "job_key": job_key,
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = TemplateRenderer().render_digest(context)
+
+    assert f"job-scanner --dismiss {job_key}" in result["html_body"]
+    assert f"Key: {job_key[:12]}" in result["html_body"]
+    assert f"Dismiss: job-scanner --dismiss {job_key}" in result["text_body"]

@@ -17,9 +17,12 @@ from app.adapters import (
     AdapterTimeoutError,
     GreenhouseAdapter,
     LeverAdapter,
+    RssAdapter,
+    SerpApiSearchAdapter,
     get_adapter,
 )
 from app.adapters.base import BaseAdapter
+from app.config.environment import EnvironmentConfig
 from app.config.models import AdvancedConfig, SourceConfig
 from app.domain.models import RawJob
 
@@ -95,16 +98,8 @@ def lever_response():
 
 @pytest.fixture
 def ashby_response():
-    """Load recorded Ashby GraphQL response."""
-    fixture_path = Path(__file__).parent / "fixtures" / "ats_responses" / "ashby_sample_response.json"
-    with open(fixture_path) as f:
-        return json.load(f)
-
-
-@pytest.fixture
-def ashby_error_response():
-    """Load Ashby GraphQL error response."""
-    fixture_path = Path(__file__).parent / "fixtures" / "ats_responses" / "ashby_graphql_error.json"
+    """Load recorded Ashby API response."""
+    fixture_path = Path(__file__).parent / "fixtures" / "ats_responses" / "ashby_api_sample_response.json"
     with open(fixture_path) as f:
         return json.load(f)
 
@@ -121,6 +116,35 @@ class TestBaseAdapter:
         """Test that BaseAdapter cannot be instantiated directly."""
         with pytest.raises(TypeError, match="Can't instantiate abstract class"):
             BaseAdapter(timeout=30)
+
+    def test_send_request_redacts_api_key_in_error_logs(self, caplog):
+        """Connection errors echo the request URL; api_key must never reach logs or exceptions."""
+        secret = "super_secret_test_key_12345"
+        adapter = GreenhouseAdapter(timeout=30)
+        error = requests.exceptions.ConnectionError(
+            f"Failed to connect: https://serpapi.com/search.json?engine=google&api_key={secret}"
+        )
+
+        with caplog.at_level("DEBUG"):
+            with patch.object(requests.Session, "request", side_effect=error):
+                with pytest.raises(AdapterHTTPError) as exc_info:
+                    adapter._make_request(
+                        "https://serpapi.com/search.json",
+                        params={"engine": "google", "api_key": secret},
+                    )
+
+        assert secret not in caplog.text
+        assert "<REDACTED>" in caplog.text
+        assert secret not in str(exc_info.value)
+        assert secret not in (exc_info.value.url or "")
+
+    def test_sanitize_url_redacts_secret_params(self):
+        """_sanitize_url masks secret query params wherever they appear in text."""
+        sanitize = BaseAdapter._sanitize_url
+
+        assert sanitize("https://x.io/s?a=1&api_key=abc123&b=2") == "https://x.io/s?a=1&api_key=<REDACTED>&b=2"
+        assert sanitize("url: /s?api_key=abc\nnext line") == "url: /s?api_key=<REDACTED>\nnext line"
+        assert sanitize("no secrets here") == "no secrets here"
 
     def test_clean_html_strips_tags(self):
         """Test HTML cleaning removes tags."""
@@ -560,63 +584,31 @@ class TestAshbyAdapter:
         # Check HTML was cleaned
         assert "<p>" not in raw_jobs[0].description
 
-    def test_fetch_jobs_graphql_error(self, ashby_config, ashby_error_response):
-        """Test handling of GraphQL error response."""
+    def test_fetch_jobs_empty_response(self, ashby_config):
+        """Test handling of empty jobs list."""
         adapter = AshbyAdapter(timeout=30)
 
-        with patch.object(adapter, "_make_request", return_value=ashby_error_response):
-            with pytest.raises(AdapterResponseError, match="GraphQL errors"):
-                adapter.fetch_jobs(ashby_config)
-
-    def test_fetch_jobs_missing_data_field(self, ashby_config):
-        """Test handling when data field is missing."""
-        adapter = AshbyAdapter(timeout=30)
-
-        response = {"data": None}
+        response = {"apiVersion": "1", "jobs": []}
 
         with patch.object(adapter, "_make_request", return_value=response):
             raw_jobs = adapter.fetch_jobs(ashby_config)
 
         assert len(raw_jobs) == 0
 
-    def test_fetch_jobs_missing_job_board(self, ashby_config):
-        """Test handling when jobBoard is missing."""
-        adapter = AshbyAdapter(timeout=30)
-
-        response = {"data": {"jobBoard": None}}
-
-        with patch.object(adapter, "_make_request", return_value=response):
-            raw_jobs = adapter.fetch_jobs(ashby_config)
-
-        assert len(raw_jobs) == 0
-
-    def test_fetch_jobs_null_location(self, ashby_config):
+    def test_fetch_jobs_null_location(self, ashby_config, ashby_response):
         """Test that null location is handled gracefully."""
         adapter = AshbyAdapter(timeout=30)
 
-        response = {
-            "data": {
-                "jobBoard": {
-                    "jobPostings": [
-                        {
-                            "id": "test-id",
-                            "title": "Engineer",
-                            "location": None,
-                            "description": "<p>Description</p>",
-                            "externalLink": "https://example.com",
-                            "publishedDate": "2025-11-01T12:00:00.000Z",
-                            "updatedAt": "2025-11-04T10:30:00.000Z",
-                        }
-                    ]
-                }
-            }
-        }
+        # Modify the fixture to have a null location
+        response = ashby_response.copy()
+        response["jobs"][3]["location"] = None
 
         with patch.object(adapter, "_make_request", return_value=response):
             raw_jobs = adapter.fetch_jobs(ashby_config)
 
-        assert len(raw_jobs) == 1
-        assert raw_jobs[0].location is None
+        assert len(raw_jobs) == 5
+        # The job with null location is the 4th one in the fixture
+        assert raw_jobs[3].location is None
 
     def test_fetch_jobs_404_returns_empty_list(self, ashby_config):
         """Test that 404 error returns empty list."""
@@ -720,3 +712,313 @@ class TestAdapterExceptions:
         assert issubclass(AdapterTimeoutError, AdapterError)
         assert issubclass(AdapterResponseError, AdapterError)
         assert issubclass(AdapterConfigurationError, AdapterError)
+
+
+# ============================================================================
+# RSS Adapter Tests
+# ============================================================================
+
+RSS2_FEED = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Jobs</title>
+    <item>
+      <guid>job-1</guid>
+      <title>Data Engineer</title>
+      <description>&lt;p&gt;Build &amp;amp; ship pipelines&lt;/p&gt;</description>
+      <link>https://example.com/jobs/1</link>
+      <pubDate>Mon, 03 Nov 2025 10:30:00 -0500</pubDate>
+      <location>Austin, TX</location>
+    </item>
+    <item>
+      <title>No Guid Role</title>
+      <description>Fallback to link</description>
+      <link>https://example.com/jobs/2</link>
+    </item>
+  </channel>
+</rss>
+"""
+
+ATOM_FEED = """<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Jobs</title>
+  <entry>
+    <id>tag:example.com,2025:42</id>
+    <title>Backend Engineer</title>
+    <content type="html">&lt;p&gt;Write &lt;b&gt;Python&lt;/b&gt;&lt;/p&gt;</content>
+    <updated>2025-11-04T10:30:00Z</updated>
+    <link rel="self" href="https://example.com/feed/42"/>
+    <link rel="alternate" href="https://example.com/jobs/42"/>
+    <author><name>Acme Inc</name></author>
+  </entry>
+</feed>
+"""
+
+
+@pytest.fixture
+def rss_config():
+    """Create RSS source config."""
+    return SourceConfig(
+        name="Example Feed",
+        type="rss",
+        identifier="https://example.com/jobs.xml",
+        options={"default_location": "Remote"},
+    )
+
+
+class TestRssAdapter:
+    """Tests for RssAdapter."""
+
+    def test_fetch_jobs_parses_rss2_feed(self, rss_config):
+        adapter = RssAdapter(timeout=30)
+
+        with patch.object(adapter, "_make_text_request", return_value=RSS2_FEED):
+            jobs = adapter.fetch_jobs(rss_config)
+
+        assert len(jobs) == 2
+        assert jobs[0].external_id == "job-1"
+        assert jobs[0].title == "Data Engineer"
+        assert jobs[0].url == "https://example.com/jobs/1"
+        assert jobs[0].location == "Austin, TX"
+        assert jobs[0].company == "Example Feed"
+        assert "<p>" not in jobs[0].description
+        assert "Build & ship pipelines" in jobs[0].description
+        assert jobs[0].posted_at == datetime(2025, 11, 3, 15, 30, tzinfo=timezone.utc)
+        # Missing guid falls back to link
+        assert jobs[1].external_id == "https://example.com/jobs/2"
+        assert jobs[1].posted_at is None
+
+    def test_fetch_jobs_parses_atom_feed(self, rss_config):
+        adapter = RssAdapter(timeout=30)
+
+        with patch.object(adapter, "_make_text_request", return_value=ATOM_FEED):
+            jobs = adapter.fetch_jobs(rss_config)
+
+        assert len(jobs) == 1
+        job = jobs[0]
+        assert job.external_id == "tag:example.com,2025:42"
+        assert job.title == "Backend Engineer"
+        assert job.url == "https://example.com/jobs/42"
+        assert job.company == "Acme Inc"
+        assert "<b>" not in job.description
+        assert "Python" in job.description
+        assert job.updated_at == datetime(2025, 11, 4, 10, 30, tzinfo=timezone.utc)
+
+    def test_fetch_jobs_malformed_xml_raises_response_error(self, rss_config):
+        adapter = RssAdapter(timeout=30)
+
+        with patch.object(adapter, "_make_text_request", return_value="<rss><channel><item>"):
+            with pytest.raises(AdapterResponseError):
+                adapter.fetch_jobs(rss_config)
+
+    def test_fetch_jobs_uses_default_location_from_options(self, rss_config):
+        adapter = RssAdapter(timeout=30)
+
+        with patch.object(adapter, "_make_text_request", return_value=RSS2_FEED):
+            jobs = adapter.fetch_jobs(rss_config)
+
+        # Second item has no location tag
+        assert jobs[1].location == "Remote"
+
+    def test_get_adapter_returns_rss_adapter(self, rss_config, base_config):
+        adapter = get_adapter(rss_config, base_config)
+
+        assert isinstance(adapter, RssAdapter)
+
+
+# ============================================================================
+# SerpAPI Google Search Adapter Tests
+# ============================================================================
+
+LEVER_UUID = "11111111-2222-3333-4444-555555555555"
+ASHBY_UUID_1 = "aaaaaaaa-0000-0000-0000-000000000001"
+ASHBY_UUID_2 = "aaaaaaaa-0000-0000-0000-000000000002"
+
+
+@pytest.fixture
+def serpapi_config():
+    """Create SerpAPI source config."""
+    return SourceConfig(
+        name="Dork Search",
+        type="serpapi_google",
+        identifier='site:boards.greenhouse.io "data engineer"',
+        options={"num_results": 5},
+    )
+
+
+def _serp_response(results):
+    return {"organic_results": results}
+
+
+def _route(routes):
+    """Build a _make_request side effect that dispatches on URL."""
+
+    def side_effect(url, *args, **kwargs):
+        value = routes[url]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    return side_effect
+
+
+SERP_URL = "https://serpapi.com/search.json"
+GH_URL = "https://boards-api.greenhouse.io/v1/boards/acme/jobs/777"
+LEVER_URL = f"https://api.lever.co/v0/postings/globex/{LEVER_UUID}"
+ASHBY_URL = "https://api.ashbyhq.com/posting-api/job-board/initech"
+
+
+class TestSerpApiSearchAdapter:
+    """Tests for SerpApiSearchAdapter."""
+
+    def test_fetch_jobs_missing_api_key_raises_configuration_error(self, serpapi_config, monkeypatch):
+        monkeypatch.delenv("SERPAPI_API_KEY", raising=False)
+        adapter = SerpApiSearchAdapter(timeout=30, api_key=None)
+
+        with pytest.raises(AdapterConfigurationError, match="SERPAPI_API_KEY"):
+            adapter.fetch_jobs(serpapi_config)
+
+    def test_api_key_falls_back_to_environment(self, monkeypatch):
+        monkeypatch.setenv("SERPAPI_API_KEY", "from-env")
+        assert SerpApiSearchAdapter(timeout=30).api_key == "from-env"
+
+    def test_fetch_jobs_hydrates_greenhouse_lever_and_ashby_urls(self, serpapi_config):
+        adapter = SerpApiSearchAdapter(timeout=30, api_key="k")
+        routes = {
+            SERP_URL: _serp_response(
+                [
+                    {"title": "t1", "link": "https://boards.greenhouse.io/acme/jobs/777", "snippet": "s1"},
+                    {"title": "t2", "link": f"https://jobs.lever.co/globex/{LEVER_UUID}", "snippet": "s2"},
+                    {"title": "t3", "link": f"https://jobs.ashbyhq.com/initech/{ASHBY_UUID_1}", "snippet": "s3"},
+                ]
+            ),
+            GH_URL: {
+                "id": 777,
+                "title": "GH Engineer",
+                "location": {"name": "Remote"},
+                "content": "<p>Greenhouse full description</p>",
+                "absolute_url": "https://boards.greenhouse.io/acme/jobs/777",
+                "first_published": "2025-11-01T10:00:00Z",
+                "updated_at": "2025-11-02T10:00:00Z",
+            },
+            LEVER_URL: {
+                "id": LEVER_UUID,
+                "text": "Lever Engineer",
+                "categories": {"location": "Berlin"},
+                "descriptionPlain": "Lever full description",
+                "hostedUrl": f"https://jobs.lever.co/globex/{LEVER_UUID}",
+                "createdAt": 1762000000000,
+            },
+            ASHBY_URL: {
+                "jobs": [
+                    {
+                        "id": ASHBY_UUID_1,
+                        "title": "Ashby Engineer",
+                        "location": "NYC",
+                        "descriptionHtml": "<p>Ashby full description</p>",
+                        "jobUrl": f"https://jobs.ashbyhq.com/initech/{ASHBY_UUID_1}",
+                        "isRemote": True,
+                        "secondaryLocations": [{"location": "Boston"}],
+                    }
+                ]
+            },
+        }
+
+        with patch.object(adapter, "_make_request", side_effect=_route(routes)) as mock_req:
+            jobs = adapter.fetch_jobs(serpapi_config)
+
+        assert [j.title for j in jobs] == ["GH Engineer", "Lever Engineer", "Ashby Engineer"]
+        assert jobs[0].description == "Greenhouse full description"
+        assert jobs[0].location == "Remote"
+        assert jobs[1].description == "Lever full description"
+        assert jobs[1].location == "Berlin"
+        assert jobs[2].is_remote is True
+        assert jobs[2].secondary_locations == ["Boston"]
+        assert [j.company for j in jobs] == ["acme", "globex", "initech"]
+
+        # SerpAPI query parameters
+        serp_call = mock_req.call_args_list[0]
+        assert serp_call.args[0] == SERP_URL
+        assert serp_call.kwargs["params"] == {
+            "engine": "google",
+            "q": serpapi_config.identifier,
+            "api_key": "k",
+            "num": 5,
+        }
+
+    def test_fetch_jobs_ashby_board_memoization(self, serpapi_config):
+        adapter = SerpApiSearchAdapter(timeout=30, api_key="k")
+        board = {
+            "jobs": [
+                {
+                    "id": uid,
+                    "title": f"Role {i}",
+                    "descriptionHtml": "<p>desc</p>",
+                    "jobUrl": f"https://jobs.ashbyhq.com/initech/{uid}",
+                }
+                for i, uid in enumerate([ASHBY_UUID_1, ASHBY_UUID_2])
+            ]
+        }
+        routes = {
+            SERP_URL: _serp_response(
+                [
+                    {"title": "a", "link": f"https://jobs.ashbyhq.com/initech/{ASHBY_UUID_1}", "snippet": "x"},
+                    {"title": "b", "link": f"https://jobs.ashbyhq.com/initech/{ASHBY_UUID_2}", "snippet": "y"},
+                ]
+            ),
+            ASHBY_URL: board,
+        }
+
+        with patch.object(adapter, "_make_request", side_effect=_route(routes)) as mock_req:
+            jobs = adapter.fetch_jobs(serpapi_config)
+
+        assert len(jobs) == 2
+        board_calls = [c for c in mock_req.call_args_list if c.args[0] == ASHBY_URL]
+        assert len(board_calls) == 1
+
+    def test_fetch_jobs_falls_back_to_snippet_on_hydration_404_or_non_ats(self, serpapi_config):
+        adapter = SerpApiSearchAdapter(timeout=30, api_key="k")
+        routes = {
+            SERP_URL: _serp_response(
+                [
+                    {"title": "Stale GH", "link": "https://boards.greenhouse.io/acme/jobs/777", "snippet": "stale snippet"},
+                    {"title": "Other Job", "link": "https://example.com/jobs/123", "snippet": "other snippet", "source": "Example"},
+                    {"title": "", "link": "https://example.com/jobs/empty", "snippet": "no title"},
+                ]
+            ),
+            GH_URL: AdapterHTTPError("HTTP 404: Not Found", status_code=404, url=GH_URL),
+        }
+
+        with patch.object(adapter, "_make_request", side_effect=_route(routes)):
+            jobs = adapter.fetch_jobs(serpapi_config)
+
+        assert len(jobs) == 2  # result with empty title is skipped
+        assert jobs[0].title == "Stale GH"
+        assert jobs[0].description == "stale snippet"
+        assert jobs[0].url == "https://boards.greenhouse.io/acme/jobs/777"
+        assert jobs[1].company == "Example"
+        assert jobs[1].url == "https://example.com/jobs/123"
+        # Deterministic SHA-256 hex id derived from the link
+        assert len(jobs[0].external_id) == 64
+        assert jobs[0].external_id != jobs[1].external_id
+
+    def test_api_key_is_redacted_from_search_errors(self, serpapi_config):
+        adapter = SerpApiSearchAdapter(timeout=30, api_key="secret-key")
+        err = AdapterHTTPError("Request failed: ...api_key=secret-key...", status_code=0, url=SERP_URL)
+
+        with patch.object(adapter, "_make_request", side_effect=err):
+            with pytest.raises(AdapterHTTPError) as exc_info:
+                adapter.fetch_jobs(serpapi_config)
+
+        assert "secret-key" not in str(exc_info.value)
+
+    def test_get_adapter_passes_serpapi_key_from_env_config(self, serpapi_config, base_config):
+        env_config = EnvironmentConfig(
+            smtp_host="h", smtp_port=587, smtp_user=None, smtp_pass=None,
+            alert_to_email="a@example.com", serpapi_api_key="env-key",
+        )
+
+        adapter = get_adapter(serpapi_config, base_config, env_config=env_config)
+
+        assert isinstance(adapter, SerpApiSearchAdapter)
+        assert adapter.api_key == "env-key"

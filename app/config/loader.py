@@ -1,10 +1,13 @@
 """Configuration loader for Job Opportunity Scanner."""
 
+import logging
 from pathlib import Path
 from typing import Optional
 
 import yaml
 from pydantic import ValidationError
+
+logger = logging.getLogger(__name__)
 
 from .environment import EnvironmentConfig, load_environment_config
 from .exceptions import ConfigurationError
@@ -124,6 +127,20 @@ def load_config(config_path: Optional[Path] = None) -> tuple[AppConfig, Environm
             ],
         )
 
+    # Expand wildcard sources with registry
+    if any(source.identifier == "*" for source in app_config.sources):
+        logger.info("Detected wildcard sources, loading company registries")
+        try:
+            from app.adapters.registry import expand_sources_with_registry
+            app_config.sources = expand_sources_with_registry(app_config.sources)
+            logger.info(f"Expanded to {len(app_config.sources)} total sources")
+        except Exception as e:
+            logger.warning(
+                f"Registry expansion failed, using original sources: {e}",
+                extra={"event": "registry.expand.error"}
+            )
+            # Continue with original sources - graceful degradation
+
     # Load and validate environment variables
     try:
         env_config = load_environment_config()
@@ -162,6 +179,7 @@ def _find_config_file(config_path: Optional[Path] = None) -> Path:
                 f"Specified configuration file not found: {config_path}",
                 suggestions=[
                     f"Ensure {config_path} exists",
+                    "Copy config.example.yaml to create one",
                     "Check the path and try again",
                 ],
             )

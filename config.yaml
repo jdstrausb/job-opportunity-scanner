@@ -3,10 +3,36 @@
 
 # List of ATS sources to monitor
 sources:
-  - name: "Cloudflare Careers"
+  - name: "All Greenhouse Sources"
     type: "greenhouse"
-    identifier: "cloudflare"
+    identifier: "*"
     enabled: true
+
+  - name: "All Ashby Sources"
+    type: "ashby"
+    identifier: "*"
+    enabled: true
+
+  # - name: "Valon (Ashby)"
+  #   type: "ashby"
+  #   identifier: "valon"
+  #   enabled: true
+
+  # Add Lever sources (different ATS platform)
+  # - name: "Netflix"
+  #   type: "lever"
+  #   identifier: "netflix"
+  #   enabled: true
+
+  # - name: "Spotify"
+  #   type: "lever"
+  #   identifier: "spotify"
+  #   enabled: true
+
+  # - name: "Coursera"
+  #   type: "lever"
+  #   identifier: "coursera"
+  #   enabled: true
 
 # Polling interval for scanning jobs
 # Supported formats: ISO-8601 duration (e.g., PT15M) or human-readable (e.g., 15m)
@@ -17,18 +43,175 @@ scan_interval: "15m"
 search_criteria:
   # Required terms: ALL terms must be present in job title or description (AND logic)
   # Case-insensitive, punctuation-insensitive matching
-  required_terms:
-    - "engineer"
-    - "remote"
+  # LEAVE EMPTY to not require any specific terms
+  required_terms: []
 
   # Keyword groups: AT LEAST ONE term from each group must match (OR within groups)
-  # Case-insensitive, punctuation-insensitive matching
-  keyword_groups: []
+  keyword_groups:
+    # Programming languages you're skilled in
+    - ["javascript", "typescript", "ruby", "rails", "ruby on rails"]
+
   # Exclusion terms: Jobs containing ANY of these terms are filtered out
-  # Takes precedence over required and keyword groups
   exclude_terms:
     - "intern"
+    - "internship"
+    - "contract"
+    - "on-site only"
+    - "relocation required"
+    - "java"
+    - "php"
+    - ".net"
+    - "c#"
+    - "scala"
+
+  # Boundary terms: require word-boundary matching to avoid false positives
+  # "rails" won't match "guardrails" or "payment rails"
+  boundary_terms:
+    - "rails"
+
+  # Contextual terms: only count as matches if context terms are also present
+  # "rails" only matches if "ruby" is somewhere in the posting
+  contextual_terms:
+    rails:
+      - "ruby"
+
+filtering:
+  # Age filtering
+  max_job_age_days: 180
+  use_updated_at_fallback: true
+  treat_recent_update_as_fresh: true
+
+  # Remote requirements
+  require_remote: true
+  remote_synonyms:
+    - "remote"
+    - "remote - us"
+    - "remote (us)"
+    - "remote us"
+    - "remote - usa"
+    - "remote - united states"
+    - "work from home"
+    - "wfh"
+    - "anywhere"
+    - "hybrid"  # Hybrid allowed since you're in Philly
+
+  # Acceptable countries for remote work
+  acceptable_countries:
+    - "united states"
+    - "us"
+    - "usa"
+    - "u.s."
+
+  # Region filtering: accept Americas/US remote, block EMEA/APAC
+  remote_allowed_regions:
+    - "americas"
+    - "us"
+    - "usa"
+    - "united states"
+    - "est"
+    - "eastern"
+    - "north america"
+
+  remote_blocked_regions:
+    - "emea"
+    - "apac"
+    - "india"
+    - "uk"
+    - "europe"
+    - "asia"
+
+  # Canada exception: allow if posting explicitly mentions US eligibility
+  allow_remote_canada_if_us_allowed: true
+  us_eligibility_phrases:
+    - "us or canada"
+    - "canada or us"
+    - "united states or canada"
+    - "open to us applicants"
+    - "north america"
+
+  # Hybrid handling: allow hybrid jobs in Philadelphia metro area
+  allow_hybrid_cities:
+    - "philadelphia"
+    - "philadelphia, pa"
+    - "philly"
+    - "king of prussia"
+    - "conshohocken"
+    - "plymouth meeting"
+    - "blue bell"
+    - "malvern"
+    - "exton"
+    - "wayne"
+    - "radnor"
+    - "cherry hill"  # NJ suburb
+
+  # Require structured remote signals (is_remote flag or location match)
+  require_remote_structured: true
+
+  # Seniority filtering: target mid-level roles, block senior/staff/principal
+  enable_seniority_filter: true
+  seniority_block_terms:
+    - "senior"
+    - "sr"
+    - "sr."
+    - "staff"
+    - "principal"
+    - "lead"
+    - "manager"
+    - "director"
+    - "head of"
+    - "vp"
+    - "chief"
+
+  # Allow terms that override seniority blocking (empty = no overrides)
+  seniority_allow_terms: []
+
+  # Experience filtering: target 3-8 years, hard block 9+
+  enable_experience_filter: true
+  max_years_experience: 8
+  hard_block_years: 9
+
+  # Role family filtering: only engineering/developer roles
+  enable_role_filter: true
+  role_allow_terms:
+    - "developer"
+    - "engineer"
+    - "engineering"
+    - "programmer"
+    - "software"
+
+  role_block_terms:
+    - "recruiter"
+    - "hr"
+    - "human resources"
+    - "people ops"
     - "sales"
+    - "account executive"
+    - "account manager"
+    - "business development"
+    - "support"
+    - "customer success"
+    - "customer service"
+    - "compliance"
+    - "legal"
+    - "counsel"
+    - "marketing"
+    - "content"
+    - "copywriter"
+    - "designer"
+    - "product designer"
+    - "ux designer"
+    - "ui designer"
+    - "analyst"
+    - "data analyst"
+    - "business analyst"
+    - "project manager"
+    - "program manager"
+    - "scrum master"
+    - "qa"
+    - "quality assurance"
+    - "tester"
+    # - "devops"  # Remove if you want DevOps roles
+    # - "sre"     # Remove if you want SRE roles
 
 # Email notification configuration
 # Note: Email credentials should be set via environment variables:
@@ -46,6 +229,10 @@ email:
   retry_backoff_multiplier: 2
   # Initial retry delay in seconds
   retry_initial_delay: 5
+  # Notification delivery mode: digest (default) or legacy
+  # - digest: Single consolidated email per source with all matches grouped by company
+  # - legacy: Individual email for each matched job
+  notification_mode: "digest"
 
 # Logging configuration
 logging:

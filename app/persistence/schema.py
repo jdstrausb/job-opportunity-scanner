@@ -2,23 +2,72 @@
 
 This module defines SQLAlchemy ORM models for the database schema and provides
 conversion methods between ORM models and domain models.
+
+Timestamps are exposed to Python as timezone-aware UTC ``datetime`` objects and
+stored as fixed-width ISO 8601 strings (``YYYY-MM-DDTHH:MM:SS.ffffffZ``) by the
+``UtcIsoString`` column type. Because the stored strings sort lexically in time
+order, comparisons such as ``JobModel.last_seen_at < cutoff`` work directly with
+``datetime`` operands.
 """
 
 import logging
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy import Column, Index, MetaData, String, Text
+from sqlalchemy import JSON, Boolean, Dialect, Float, Index, MetaData, String, Text, inspect, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.types import TypeDecorator
 
-from app.domain.models import AlertRecord, Job, SourceStatus
+from app.domain.models import (
+    AlertRecord,
+    DismissalScope,
+    DismissedItem,
+    Job,
+    SourceStatus,
+    TriageStatus,
+)
+from app.utils.timestamps import ensure_utc
 
 logger = logging.getLogger(__name__)
 
-# Create base class for ORM models
-Base = declarative_base()
-metadata = MetaData()
+# On-disk timestamp format. Changing it breaks string comparisons against
+# rows written by earlier versions, so treat it as part of the schema.
+_STORAGE_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
+
+
+class UtcIsoString(TypeDecorator[datetime]):
+    """Column type mapping UTC ``datetime`` values to ISO 8601 strings.
+
+    Naive datetimes are treated as UTC; aware datetimes are converted to UTC.
+    Reads accept values with or without microseconds and with or without the
+    trailing ``Z`` so rows written by older versions still load.
+    """
+
+    impl = String(50)
+    cache_ok = True
+
+    def process_bind_param(self, value: datetime | None, dialect: Dialect) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, datetime):
+            msg = f"UtcIsoString expects datetime, got {type(value).__name__}"
+            raise TypeError(msg)
+        utc_value = ensure_utc(value)
+        assert utc_value is not None
+        return utc_value.strftime(_STORAGE_FORMAT)
+
+    def process_result_value(self, value: Any | None, dialect: Dialect) -> datetime | None:
+        if value is None or value == "":
+            return None
+        parsed = datetime.fromisoformat(str(value))
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+
+
+class Base(DeclarativeBase):
+    """Declarative base for all ORM models."""
 
 
 class JobModel(Base):
@@ -30,42 +79,59 @@ class JobModel(Base):
     __tablename__ = "jobs"
 
     # Primary key
-    job_key = Column(String(64), primary_key=True, nullable=False)
+    job_key: Mapped[str] = mapped_column(String(64), primary_key=True)
 
     # Source information
-    source_type = Column(String(50), nullable=False)
-    source_identifier = Column(String(255), nullable=False)
-    external_id = Column(String(255), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(50))
+    source_identifier: Mapped[str] = mapped_column(String(255))
+    external_id: Mapped[str] = mapped_column(String(255))
 
     # Job details
-    title = Column(Text, nullable=False)
-    company = Column(String(255), nullable=False)
-    location = Column(String(255), nullable=True)
-    description = Column(Text, nullable=False)
-    url = Column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text)
+    company: Mapped[str] = mapped_column(String(255))
+    location: Mapped[str | None] = mapped_column(String(255))
+    description: Mapped[str] = mapped_column(Text)
+    url: Mapped[str] = mapped_column(Text)
 
-    # Timestamps (stored as ISO 8601 strings)
-    posted_at = Column(String(50), nullable=True)
-    updated_at = Column(String(50), nullable=True)
-    first_seen_at = Column(String(50), nullable=False)
-    last_seen_at = Column(String(50), nullable=False)
+    # Timestamps
+    posted_at: Mapped[datetime | None] = mapped_column(UtcIsoString)
+    updated_at: Mapped[datetime | None] = mapped_column(UtcIsoString)
+    first_seen_at: Mapped[datetime] = mapped_column(UtcIsoString)
+    last_seen_at: Mapped[datetime] = mapped_column(UtcIsoString)
 
     # Change detection
-    content_hash = Column(String(64), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64))
+
+    # Location metadata for filtering
+    secondary_locations: Mapped[list[str] | None] = mapped_column(JSON)
+    is_remote: Mapped[bool | None] = mapped_column(Boolean)
+    location_country: Mapped[str | None] = mapped_column(String(255))
+
+    # Match explainability (NULL is_match = legacy row not yet scored)
+    is_match: Mapped[bool | None] = mapped_column(Boolean)
+    primary_profile: Mapped[str | None] = mapped_column(String(255))
+    matched_profiles: Mapped[list[str] | None] = mapped_column(JSON)
+    affinity_score: Mapped[float | None] = mapped_column(Float, default=0.0, server_default="0.0")
+    score_breakdown: Mapped[dict[str, float] | None] = mapped_column(JSON)
+    match_snippets: Mapped[list[str] | None] = mapped_column(JSON)
+    matched_fields: Mapped[dict[str, list[str]] | None] = mapped_column(JSON)
+
+    # User triage workflow state: new | saved | applied
+    user_status: Mapped[str | None] = mapped_column(
+        String(50), default="new", server_default="new"
+    )
 
     # Indexes
     __table_args__ = (
         Index("idx_jobs_source", "source_type", "source_identifier"),
         Index("idx_jobs_last_seen", "last_seen_at"),
         Index("idx_jobs_content_hash", "content_hash"),
+        Index("idx_jobs_match_score", "is_match", "affinity_score"),
+        Index("idx_jobs_user_status", "user_status"),
     )
 
     def to_domain(self) -> Job:
-        """Convert ORM model to domain model.
-
-        Returns:
-            Job: Domain model instance
-        """
+        """Convert ORM model to domain model."""
         return Job(
             job_key=self.job_key,
             source_type=self.source_type,
@@ -76,23 +142,27 @@ class JobModel(Base):
             location=self.location,
             description=self.description,
             url=self.url,
-            posted_at=_parse_datetime(self.posted_at),
-            updated_at=_parse_datetime(self.updated_at),
-            first_seen_at=_parse_datetime(self.first_seen_at),
-            last_seen_at=_parse_datetime(self.last_seen_at),
+            posted_at=self.posted_at,
+            updated_at=self.updated_at,
+            first_seen_at=self.first_seen_at,
+            last_seen_at=self.last_seen_at,
             content_hash=self.content_hash,
+            secondary_locations=self.secondary_locations or [],
+            is_remote=self.is_remote,
+            location_country=self.location_country,
+            is_match=self.is_match,
+            primary_profile=self.primary_profile,
+            matched_profiles=self.matched_profiles or [],
+            affinity_score=self.affinity_score or 0.0,
+            score_breakdown=self.score_breakdown or {},
+            match_snippets=self.match_snippets or [],
+            matched_fields=self.matched_fields or {},
+            user_status=TriageStatus(self.user_status or TriageStatus.NEW),
         )
 
     @classmethod
     def from_domain(cls, job: Job) -> "JobModel":
-        """Create ORM model from domain model.
-
-        Args:
-            job: Domain model instance
-
-        Returns:
-            JobModel: ORM model instance
-        """
+        """Create ORM model from domain model."""
         return cls(
             job_key=job.job_key,
             source_type=job.source_type,
@@ -103,11 +173,22 @@ class JobModel(Base):
             location=job.location,
             description=job.description,
             url=job.url,
-            posted_at=_format_datetime(job.posted_at),
-            updated_at=_format_datetime(job.updated_at),
-            first_seen_at=_format_datetime(job.first_seen_at),
-            last_seen_at=_format_datetime(job.last_seen_at),
+            posted_at=job.posted_at,
+            updated_at=job.updated_at,
+            first_seen_at=job.first_seen_at,
+            last_seen_at=job.last_seen_at,
             content_hash=job.content_hash,
+            secondary_locations=job.secondary_locations or None,
+            is_remote=job.is_remote,
+            location_country=job.location_country,
+            is_match=job.is_match,
+            primary_profile=job.primary_profile,
+            matched_profiles=job.matched_profiles,
+            affinity_score=job.affinity_score,
+            score_breakdown=job.score_breakdown,
+            match_snippets=job.match_snippets,
+            matched_fields=job.matched_fields,
+            user_status=job.user_status.value,
         )
 
 
@@ -119,49 +200,39 @@ class SourceStatusModel(Base):
 
     __tablename__ = "sources"
 
-    # Primary key
-    source_identifier = Column(String(255), primary_key=True, nullable=False)
+    # Composite primary key: the same slug can exist on several ATS types
+    # (e.g. "acme" on both Greenhouse and Ashby), matching AppConfig's
+    # (type, identifier) uniqueness rule. Column order matches the table
+    # created by earlier versions so the legacy-key rebuild can copy rows.
+    source_identifier: Mapped[str] = mapped_column(String(255), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    source_type: Mapped[str] = mapped_column(String(50), primary_key=True)
 
-    # Source information
-    name = Column(String(255), nullable=False)
-    source_type = Column(String(50), nullable=False)
-
-    # Health tracking (timestamps stored as ISO 8601 strings)
-    last_success_at = Column(String(50), nullable=True)
-    last_error_at = Column(String(50), nullable=True)
-    error_message = Column(Text, nullable=True)
+    # Health tracking
+    last_success_at: Mapped[datetime | None] = mapped_column(UtcIsoString)
+    last_error_at: Mapped[datetime | None] = mapped_column(UtcIsoString)
+    error_message: Mapped[str | None] = mapped_column(Text)
 
     def to_domain(self) -> SourceStatus:
-        """Convert ORM model to domain model.
-
-        Returns:
-            SourceStatus: Domain model instance
-        """
+        """Convert ORM model to domain model."""
         return SourceStatus(
             source_identifier=self.source_identifier,
             name=self.name,
             source_type=self.source_type,
-            last_success_at=_parse_datetime(self.last_success_at),
-            last_error_at=_parse_datetime(self.last_error_at),
+            last_success_at=self.last_success_at,
+            last_error_at=self.last_error_at,
             error_message=self.error_message,
         )
 
     @classmethod
     def from_domain(cls, source_status: SourceStatus) -> "SourceStatusModel":
-        """Create ORM model from domain model.
-
-        Args:
-            source_status: Domain model instance
-
-        Returns:
-            SourceStatusModel: ORM model instance
-        """
+        """Create ORM model from domain model."""
         return cls(
             source_identifier=source_status.source_identifier,
             name=source_status.name,
             source_type=source_status.source_type,
-            last_success_at=_format_datetime(source_status.last_success_at),
-            last_error_at=_format_datetime(source_status.last_error_at),
+            last_success_at=source_status.last_success_at,
+            last_error_at=source_status.last_error_at,
             error_message=source_status.error_message,
         )
 
@@ -175,91 +246,151 @@ class AlertRecordModel(Base):
     __tablename__ = "alerts_sent"
 
     # Composite primary key
-    job_key = Column(String(64), primary_key=True, nullable=False)
-    version_hash = Column(String(64), primary_key=True, nullable=False)
+    job_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    version_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
 
-    # Timestamp (stored as ISO 8601 string)
-    sent_at = Column(String(50), nullable=False)
+    sent_at: Mapped[datetime] = mapped_column(UtcIsoString)
 
     # Indexes
     __table_args__ = (Index("idx_alerts_sent_at", "sent_at"),)
 
     def to_domain(self) -> AlertRecord:
-        """Convert ORM model to domain model.
-
-        Returns:
-            AlertRecord: Domain model instance
-        """
+        """Convert ORM model to domain model."""
         return AlertRecord(
             job_key=self.job_key,
             version_hash=self.version_hash,
-            sent_at=_parse_datetime(self.sent_at),
+            sent_at=self.sent_at,
         )
 
     @classmethod
     def from_domain(cls, alert_record: AlertRecord) -> "AlertRecordModel":
-        """Create ORM model from domain model.
-
-        Args:
-            alert_record: Domain model instance
-
-        Returns:
-            AlertRecordModel: ORM model instance
-        """
+        """Create ORM model from domain model."""
         return cls(
             job_key=alert_record.job_key,
             version_hash=alert_record.version_hash,
-            sent_at=_format_datetime(alert_record.sent_at),
+            sent_at=alert_record.sent_at,
         )
 
 
-def _format_datetime(dt: Optional[datetime]) -> Optional[str]:
-    """Format datetime as ISO 8601 string for database storage.
+class DismissedItemModel(Base):
+    """ORM model for dismissed_items table.
+
+    Stores persistent job, company, and source mutes.
+    """
+
+    __tablename__ = "dismissed_items"
+
+    # Composite primary key
+    item_key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(50), primary_key=True)
+
+    reason: Mapped[str | None] = mapped_column(Text)
+    dismissed_at: Mapped[datetime] = mapped_column(UtcIsoString)
+
+    # Indexes
+    __table_args__ = (Index("idx_dismissed_scope_key", "scope", "item_key"),)
+
+    def to_domain(self) -> DismissedItem:
+        """Convert ORM model to domain model."""
+        return DismissedItem(
+            item_key=self.item_key,
+            scope=DismissalScope(self.scope),
+            reason=self.reason,
+            dismissed_at=self.dismissed_at,
+        )
+
+    @classmethod
+    def from_domain(cls, item: DismissedItem) -> "DismissedItemModel":
+        """Create ORM model from domain model."""
+        return cls(
+            item_key=item.item_key,
+            scope=item.scope.value,
+            reason=item.reason,
+            dismissed_at=item.dismissed_at,
+        )
+
+
+_JOBS_MIGRATION_COLUMNS = {
+    "secondary_locations": "JSON",
+    "is_remote": "BOOLEAN",
+    "location_country": "VARCHAR(255)",
+    "is_match": "BOOLEAN",
+    "primary_profile": "VARCHAR(255)",
+    "matched_profiles": "JSON",
+    "affinity_score": "FLOAT DEFAULT 0.0",
+    "score_breakdown": "JSON",
+    "match_snippets": "JSON",
+    "matched_fields": "JSON",
+    "user_status": "VARCHAR(50) DEFAULT 'new'",
+}
+
+_JOBS_MIGRATION_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_jobs_match_score ON jobs (is_match, affinity_score)",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_user_status ON jobs (user_status)",
+)
+
+
+def _ensure_table_columns(engine: Engine) -> None:
+    """Idempotently add missing nullable location columns to a legacy jobs table.
 
     Args:
-        dt: Datetime object (must be timezone-aware UTC)
-
-    Returns:
-        ISO 8601 formatted string or None
+        engine: SQLAlchemy engine instance
     """
-    if dt is None:
-        return None
+    existing = {col["name"] for col in inspect(engine).get_columns("jobs")}
+    missing = {n: t for n, t in _JOBS_MIGRATION_COLUMNS.items() if n not in existing}
 
-    # Ensure datetime is UTC
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        dt = dt.astimezone(timezone.utc)
+    with engine.begin() as conn:
+        for name, sql_type in missing.items():
+            logger.info("Adding missing column jobs.%s", name)
+            conn.execute(text(f"ALTER TABLE jobs ADD COLUMN {name} {sql_type}"))
+        # Indexes reference the new columns, so they must follow the ALTERs.
+        for statement in _JOBS_MIGRATION_INDEXES:
+            conn.execute(text(statement))
 
-    # Format as ISO 8601 with explicit Z suffix
-    return dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+_SOURCES_REBUILD_TABLE = "sources_rebuild"
 
 
-def _parse_datetime(dt_str: Optional[str]) -> Optional[datetime]:
-    """Parse ISO 8601 string to datetime object.
+def _ensure_sources_primary_key(engine: Engine) -> None:
+    """Rebuild a legacy sources table keyed on source_identifier alone.
+
+    SQLite cannot alter a primary key in place, so the table is copied into a
+    new table with the current (source_type, source_identifier) key and swapped
+    in. Every legacy row is unique on source_identifier, so it is also unique on
+    the composite key and the copy cannot conflict. Idempotent: a table that
+    already has the composite key is left alone.
 
     Args:
-        dt_str: ISO 8601 formatted string
-
-    Returns:
-        Timezone-aware datetime in UTC or None
+        engine: SQLAlchemy engine instance
     """
-    if dt_str is None or dt_str == "":
-        return None
+    sources = Base.metadata.tables[SourceStatusModel.__tablename__]
+    expected_pk = {col.name for col in sources.primary_key.columns}
+    inspector = inspect(engine)
+    current_pk = set(inspector.get_pk_constraint(sources.name)["constrained_columns"])
+    if current_pk == expected_pk:
+        return
 
-    # Parse ISO 8601 format
-    # Handle formats: YYYY-MM-DDTHH:MM:SS.ffffffZ or YYYY-MM-DDTHH:MM:SSZ
-    dt_str = dt_str.rstrip("Z")  # Remove Z suffix if present
-
-    # Try with microseconds first
-    try:
-        dt = datetime.strptime(dt_str, "%Y-%m-%dT%H:%M:%S.%f")
-    except ValueError:
-        # Try without microseconds
-        dt = datetime.strptime(dt_str, "%Y-%m-%dT%H:%M:%S")
-
-    # Ensure timezone-aware UTC
-    return dt.replace(tzinfo=timezone.utc)
+    logger.info(
+        "Rebuilding %s primary key: %s -> %s",
+        sources.name,
+        sorted(current_pk),
+        sorted(expected_pk),
+    )
+    rebuild = sources.to_metadata(MetaData(), name=_SOURCES_REBUILD_TABLE)
+    columns = ", ".join(col.name for col in sources.columns)
+    with engine.begin() as conn:
+        # A leftover from an interrupted earlier attempt holds no data the
+        # legacy table lacks, so it is safe to discard.
+        rebuild.drop(conn, checkfirst=True)
+        rebuild.create(conn)
+        conn.execute(
+            text(
+                f"INSERT INTO {_SOURCES_REBUILD_TABLE} ({columns}) "
+                f"SELECT {columns} FROM {sources.name}"
+            )
+        )
+        conn.execute(text(f"DROP TABLE {sources.name}"))
+        conn.execute(text(f"ALTER TABLE {_SOURCES_REBUILD_TABLE} RENAME TO {sources.name}"))
 
 
 def create_schema(engine: Engine) -> None:
@@ -277,12 +408,15 @@ def create_schema(engine: Engine) -> None:
         # Create all tables defined in Base
         Base.metadata.create_all(engine, checkfirst=True)
 
-        # Log created tables
-        from sqlalchemy import inspect
-        inspector = inspect(engine)
-        tables = inspector.get_table_names()
-        logger.info(f"Database schema ready. Tables: {', '.join(tables)}")
+        # Add columns introduced after the table was first created
+        _ensure_table_columns(engine)
+
+        # Replace primary keys that SQLite cannot alter in place
+        _ensure_sources_primary_key(engine)
+
+        tables = inspect(engine).get_table_names()
+        logger.info("Database schema ready. Tables: %s", ", ".join(tables))
 
     except Exception as e:
-        logger.error(f"Failed to create database schema: {e}", exc_info=True)
+        logger.exception("Failed to create database schema: %s", e)
         raise

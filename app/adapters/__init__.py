@@ -4,6 +4,8 @@ This module provides adapters for multiple ATS platforms:
 - Greenhouse: greenhouse.GreenhouseAdapter
 - Lever: lever.LeverAdapter
 - Ashby: ashby.AshbyAdapter
+- RSS/Atom feeds: rss.RssAdapter
+- Google search discovery: serpapi_google.SerpApiSearchAdapter
 
 Use the factory function to instantiate adapters:
     from app.adapters.factory import get_adapter
@@ -34,6 +36,9 @@ from .exceptions import (
 from .factory import get_adapter
 from .greenhouse import GreenhouseAdapter
 from .lever import LeverAdapter
+from .registry import CompanyRegistry, expand_sources_with_registry
+from .rss import RssAdapter
+from .serpapi_google import SerpApiSearchAdapter
 
 __all__ = [
     # Base and factory
@@ -43,6 +48,11 @@ __all__ = [
     "GreenhouseAdapter",
     "LeverAdapter",
     "AshbyAdapter",
+    "RssAdapter",
+    "SerpApiSearchAdapter",
+    # Registry
+    "CompanyRegistry",
+    "expand_sources_with_registry",
     # Exceptions
     "AdapterError",
     "AdapterHTTPError",

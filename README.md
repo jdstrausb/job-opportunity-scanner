@@ -5,7 +5,9 @@ An automated service that monitors Applicant Tracking System (ATS) APIs for conf
 ## Features
 
 - **Multi-ATS Support**: Integrates with Greenhouse, Lever, and Ashby job posting systems
+- **Company Registry System**: Bulk-configure 50+ companies using JSON registries instead of manual entries
 - **Keyword-Based Filtering**: Define required terms, OR groups, and exclusion lists for precise job matching
+- **Consolidated Email Digests**: Single daily digest email with all matching jobs grouped by company (default mode)
 - **Deduplication**: Intelligent change detection prevents duplicate notifications
 - **Email Notifications**: Receive alerts for matching job postings with matched keyword highlights
 - **Scheduled Scanning**: Configurable polling interval (5 minutes to 24 hours)
@@ -20,6 +22,10 @@ An automated service that monitors Applicant Tracking System (ATS) APIs for conf
   - [Environment Variables](#environment-variables)
   - [Application Config (config.yaml)](#application-config-configyaml)
   - [Configuration Validation](#configuration-validation)
+- [New Features](#new-features)
+  - [Company Registry System](#company-registry-system)
+  - [Consolidated Email Digests](#consolidated-email-digests)
+- [Manual Testing](#manual-testing)
 - [Running the Scanner](#running-the-scanner)
   - [Manual Mode](#manual-mode-one-off-scans)
   - [Daemon Mode](#daemon-mode-continuous-scanning)
@@ -298,6 +304,290 @@ Summary:
 | `At least one source must be enabled` | Set `enabled: true` on at least one source |
 
 After fixing errors, re-run `verify_config.py` before attempting to run the scanner.
+
+---
+
+## New Features
+
+### Company Registry System
+
+#### Overview
+
+The **Company Registry System** enables bulk configuration of multiple companies using JSON files instead of manual config entries. Configure 50+ companies with just 2 lines of configuration by using wildcard identifiers.
+
+**Benefits:**
+- Reduce configuration from 50 lines to 2 lines
+- Easily enable/disable companies without code changes
+- Share company lists across team members
+- Version control company lists separately from deployment config
+
+#### Quick Start
+
+**1. Verify registry files exist:**
+
+```bash
+ls -la data/registries/
+# Should show:
+# - greenhouse_companies.json (48 companies)
+# - lever_companies.json (7 companies)
+# - ashby_companies.json (3 companies)
+```
+
+**2. Update config.yaml with wildcard sources:**
+
+```yaml
+sources:
+  # Use wildcard to scan ALL enabled companies in registry
+  - name: "All Greenhouse Companies"
+    type: "greenhouse"
+    identifier: "*"        # The wildcard!
+    enabled: true
+
+  # Mix wildcards with explicit sources
+  - name: "Netflix"
+    type: "lever"
+    identifier: "netflix"
+    enabled: true
+```
+
+**3. Run a scan - watch for expansion logs:**
+
+```bash
+job-scanner --manual-run --log-level DEBUG 2>&1 | grep -E "registry|expand"
+# Expected:
+# "Detected wildcard sources, loading company registries"
+# "Loaded 48 companies from greenhouse registry (48 enabled)"
+# "Expanded to 49 total sources"
+```
+
+#### Registry File Format
+
+Registry files are located in `data/registries/` and follow this JSON schema:
+
+```json
+{
+  "version": "1.0",
+  "updated_at": "2025-11-11T00:00:00Z",
+  "companies": [
+    {
+      "identifier": "github",
+      "name": "GitHub",
+      "enabled": true
+    },
+    {
+      "identifier": "stripe",
+      "name": "Stripe",
+      "enabled": false     // Disabled companies are skipped
+    }
+  ]
+}
+```
+
+**Fields:**
+- `identifier` (required): Company slug used in API endpoints
+- `name` (required): Display name for logging
+- `enabled` (optional, default=true): Set to false to temporarily disable without deletion
+
+#### Managing Companies
+
+**Add a new company:**
+
+1. Edit `data/registries/{ats}_companies.json`
+2. Add entry to `companies` array
+3. Restart the scanner (changes take effect on next startup)
+
+**Disable a company:**
+
+```json
+{"identifier": "old-company", "name": "Old Company", "enabled": false}
+```
+
+**Re-enable a company:**
+
+```json
+{"identifier": "old-company", "name": "Old Company", "enabled": true}
+```
+
+**Important:** Registry changes require a restart to take effect (registries are loaded once at startup).
+
+#### Full Documentation
+
+For complete technical details, testing procedures, and troubleshooting:
+
+👉 **See [`docs/MANUAL_TESTING_GUIDE.md`](docs/MANUAL_TESTING_GUIDE.md)** - Feature 1: Testing the Registry System
+
+Or read the technical specification:
+- [`docs/static-registry-system-techspec.md`](docs/static-registry-system-techspec.md)
+
+---
+
+### Consolidated Email Digests
+
+#### Overview
+
+The **Consolidated Email Digest** feature consolidates all matched jobs from a scan into a single well-organized email instead of sending individual emails per job.
+
+**Before (Legacy Mode):**
+- 12 matching jobs = 12 emails
+- Hard to scan through inbox
+
+**After (Digest Mode - Default):**
+- 12 matching jobs = 1 digest email
+- Jobs grouped by company
+- Sorted by newest posting date
+- Much more manageable
+
+#### Quick Start
+
+**1. Verify digest mode is enabled in config.yaml:**
+
+```yaml
+email:
+  notification_mode: "digest"  # Default; can also omit this line
+```
+
+**2. Run a manual scan:**
+
+```bash
+job-scanner --manual-run --log-level DEBUG
+```
+
+**3. Check your email for digest:**
+
+The digest should arrive with:
+- Subject: `"Job Opportunities Digest: 12 matches from 5 companies"`
+- Body: Companies sorted by newest job, jobs within each company sorted by date
+- Each job shows: title, location, posted date, match quality, matched terms, apply link
+
+#### Email Format
+
+**Subject Line:**
+```
+Job Opportunities Digest: 12 matches from 5 companies
+```
+
+**Email Body Structure:**
+```
+🎯 Job Opportunities Digest
+Scan Date: 2025-11-11 | Scan ID: a1b2c3d4
+
+Summary: 12 Matches from 5 Companies
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GITHUB (3 positions)
+Most recent: 2025-11-11
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• Senior Software Engineer
+  📍 Remote
+  📅 2025-11-11
+  Match: perfect
+  Reason: Requires Python + Docker expertise
+  Terms: python, docker, senior
+
+• Backend Engineer
+  📍 San Francisco, CA
+  📅 2025-11-10
+  Match: partial
+  Reason: Backend role with Python
+  Terms: python, backend
+
+... more companies and jobs ...
+
+Footer:
+This digest was generated by Job Opportunity Scanner.
+```
+
+#### Deduplication
+
+The digest system includes automatic deduplication:
+
+- **First scan:** Digest sent with all matching jobs
+- **Second scan (no changes):** No digest sent (all jobs already notified)
+- **Job changes detected:** Digest resent with updated job
+
+To manually reset deduplication (development only):
+
+```bash
+sqlite3 data/job_scanner.db "DELETE FROM alerts_sent;"
+```
+
+#### Legacy Mode (Per-Job Emails)
+
+To receive individual emails per job (old behavior):
+
+```yaml
+email:
+  notification_mode: "legacy"  # One email per matched job
+```
+
+Then:
+```bash
+sqlite3 data/job_scanner.db "DELETE FROM alerts_sent;"  # Clear history
+job-scanner --manual-run  # Resend as individual emails
+```
+
+#### Configuration
+
+**Available modes in config.yaml:**
+
+```yaml
+email:
+  notification_mode: "digest"     # Single email with all jobs (DEFAULT)
+  notification_mode: "legacy"     # Individual email per job (old behavior)
+```
+
+If the field is omitted, digest mode is used (new default behavior).
+
+#### Full Documentation
+
+For complete testing procedures, troubleshooting, and advanced customization:
+
+👉 **See [`docs/MANUAL_TESTING_GUIDE.md`](docs/MANUAL_TESTING_GUIDE.md)** - Feature 2: Testing Digest Notifications
+
+Or read the technical specification:
+- [`docs/consolidated-email-notifications-techspec.md`](docs/consolidated-email-notifications-techspec.md)
+
+---
+
+## Manual Testing
+
+Before deploying to production, test both new features with your actual search criteria and SMTP configuration.
+
+**Complete manual testing guide:**
+
+👉 **See [`docs/MANUAL_TESTING_GUIDE.md`](docs/MANUAL_TESTING_GUIDE.md)**
+
+This guide covers:
+- ✅ Setting up email for testing (real SMTP or Mailhog)
+- ✅ Verifying registry expansion
+- ✅ Testing digest email generation
+- ✅ Deduplication behavior
+- ✅ Running in daemon mode
+- ✅ Troubleshooting checklist
+
+**Quick test (5 minutes):**
+
+```bash
+# Update config to use registry
+# (see Quick Start above)
+
+# Run manual scan with debug logging
+job-scanner --manual-run --log-level DEBUG
+
+# Watch for registry expansion logs
+grep -E "registry|expand" logs/scanner.log
+
+# Check email (real SMTP or Mailhog at http://localhost:1025)
+```
+
+**Expected output:**
+- ✅ Logs show registry loading and wildcard expansion
+- ✅ Digest email arrives with all matches grouped by company
+- ✅ Email shows jobs sorted by date
+- ✅ Deduplication works on second run (no email sent)
+
+---
 
 ## Running the Scanner
 

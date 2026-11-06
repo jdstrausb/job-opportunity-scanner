@@ -16,6 +16,10 @@ Public API:
     - JobRepository: CRUD operations for jobs
     - SourceRepository: CRUD operations for source status tracking
     - AlertRepository: CRUD operations for alert records
+    - DismissedItemRepository: CRUD operations for dismissed jobs/companies/sources
+    - reevaluate_stored_jobs(session, keyword_matcher, *, only_unscored=False) -> int
+    - TriageStatus: new | saved | applied
+    - JobQueryFilters / JobTriageRecord / JobQueryPage: triage query seam for JobRepository.query_jobs()
 
     # Exceptions
     - PersistenceError: Base exception for all persistence errors
@@ -40,7 +44,18 @@ Example usage:
 from .database import close_database, get_engine, get_session, init_database
 
 # Repository classes
-from .repositories import AlertRepository, JobRepository, SourceRepository
+from .repositories import (
+    AlertRepository,
+    DismissedItemRepository,
+    JobQueryFilters,
+    JobQueryPage,
+    JobRepository,
+    JobTriageRecord,
+    SourceRepository,
+    reevaluate_stored_jobs,
+)
+from app.domain.models import TriageStatus
+from .schema import DismissedItemModel
 
 # Exceptions
 from .exceptions import (
@@ -61,6 +76,13 @@ __all__ = [
     "JobRepository",
     "SourceRepository",
     "AlertRepository",
+    "DismissedItemRepository",
+    "DismissedItemModel",
+    "TriageStatus",
+    "JobQueryFilters",
+    "JobQueryPage",
+    "JobTriageRecord",
+    "reevaluate_stored_jobs",
     # Exceptions
     "PersistenceError",
     "DatabaseConnectionError",

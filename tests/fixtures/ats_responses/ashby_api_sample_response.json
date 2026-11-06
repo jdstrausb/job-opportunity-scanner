@@ -1,0 +1,118 @@
+{
+  "apiVersion": "1",
+  "jobs": [
+    {
+      "id": "ashby-job-id-001",
+      "title": "Senior Software Engineer",
+      "location": "San Francisco, CA",
+      "department": "Engineering",
+      "team": "Platform",
+      "employmentType": "FullTime",
+      "isRemote": false,
+      "secondaryLocations": [
+        {
+          "location": "Remote - US"
+        }
+      ],
+      "address": {
+        "postalAddress": {
+          "addressCountry": "United States"
+        }
+      },
+      "descriptionHtml": "<p>Senior Software Engineer at Example Corp.</p><ul><li>Python</li><li>APIs</li></ul>",
+      "descriptionPlain": "Senior Software Engineer at Example Corp.",
+      "publishedAt": "2025-11-01T10:00:00.000+00:00",
+      "updatedAt": "2025-11-03T12:30:00.000+00:00",
+      "jobUrl": "https://jobs.ashbyhq.com/example-org-id/ashby-job-id-001",
+      "applyUrl": "https://jobs.ashbyhq.com/example-org-id/ashby-job-id-001/application"
+    },
+    {
+      "id": "ashby-job-id-002",
+      "title": "Backend Engineer",
+      "location": "Remote",
+      "department": "Engineering",
+      "team": "Platform",
+      "employmentType": "FullTime",
+      "isRemote": true,
+      "secondaryLocations": [],
+      "address": {
+        "postalAddress": {
+          "addressCountry": "United States"
+        }
+      },
+      "descriptionHtml": "<p>Backend Engineer at Example Corp.</p><ul><li>Python</li><li>APIs</li></ul>",
+      "descriptionPlain": "Backend Engineer at Example Corp.",
+      "publishedAt": "2025-10-20T09:00:00.000+00:00",
+      "updatedAt": "2025-10-25T09:00:00.000+00:00",
+      "jobUrl": "https://jobs.ashbyhq.com/example-org-id/ashby-job-id-002",
+      "applyUrl": "https://jobs.ashbyhq.com/example-org-id/ashby-job-id-002/application"
+    },
+    {
+      "id": "ashby-job-id-003",
+      "title": "Staff Platform Engineer",
+      "location": "New York, NY",
+      "department": "Engineering",
+      "team": "Platform",
+      "employmentType": "FullTime",
+      "isRemote": false,
+      "secondaryLocations": [
+        {
+          "location": "Boston, MA"
+        }
+      ],
+      "address": {
+        "postalAddress": {
+          "addressCountry": "United States"
+        }
+      },
+      "descriptionHtml": "<p>Staff Platform Engineer at Example Corp.</p><ul><li>Python</li><li>APIs</li></ul>",
+      "descriptionPlain": "Staff Platform Engineer at Example Corp.",
+      "publishedAt": "2025-10-15T09:00:00.000+00:00",
+      "updatedAt": "2025-10-16T09:00:00.000+00:00",
+      "jobUrl": "https://jobs.ashbyhq.com/example-org-id/ashby-job-id-003",
+      "applyUrl": "https://jobs.ashbyhq.com/example-org-id/ashby-job-id-003/application"
+    },
+    {
+      "id": "ashby-job-id-004",
+      "title": "Data Engineer",
+      "location": "Berlin, Germany",
+      "department": "Engineering",
+      "team": "Platform",
+      "employmentType": "FullTime",
+      "isRemote": false,
+      "secondaryLocations": [],
+      "address": {
+        "postalAddress": {
+          "addressCountry": "Germany"
+        }
+      },
+      "descriptionHtml": "<p>Data Engineer at Example Corp.</p><ul><li>Python</li><li>APIs</li></ul>",
+      "descriptionPlain": "Data Engineer at Example Corp.",
+      "publishedAt": "2025-09-30T09:00:00.000+00:00",
+      "updatedAt": "2025-10-01T09:00:00.000+00:00",
+      "jobUrl": "https://jobs.ashbyhq.com/example-org-id/ashby-job-id-004",
+      "applyUrl": "https://jobs.ashbyhq.com/example-org-id/ashby-job-id-004/application"
+    },
+    {
+      "id": "ashby-job-id-005",
+      "title": "Engineering Manager",
+      "location": "Toronto, Canada",
+      "department": "Engineering",
+      "team": "Platform",
+      "employmentType": "FullTime",
+      "isRemote": true,
+      "secondaryLocations": [
+        {
+          "location": "Remote - Canada"
+        }
+      ],
+      "address": null,
+      "descriptionHtml": "<p>Engineering Manager at Example Corp.</p><ul><li>Python</li><li>APIs</li></ul>",
+      "descriptionPlain": "Engineering Manager at Example Corp.",
+      "publishedAt": "2025-09-01T09:00:00.000+00:00",
+      "updatedAt": "2025-09-02T09:00:00.000+00:00",
+      "jobUrl": "https://jobs.ashbyhq.com/example-org-id/ashby-job-id-005",
+      "applyUrl": "https://jobs.ashbyhq.com/example-org-id/ashby-job-id-005/application"
+    }
+  ]
+}

@@ -56,6 +56,13 @@ class SchedulerService:
         The first run will execute immediately after startup.
         Subsequent runs will follow the configured interval.
         """
+        if self.scheduler.running:
+            logger.warning(
+                "Scheduler already running; ignoring start()",
+                extra={"event": "scheduler.already_running"},
+            )
+            return
+
         # Create interval trigger
         trigger = IntervalTrigger(
             seconds=self.interval_seconds,
@@ -84,6 +91,25 @@ class SchedulerService:
                 "interval_seconds": self.interval_seconds,
                 "next_run_time": next_run.isoformat(),
             },
+        )
+
+    def reschedule(self, interval_seconds: int) -> None:
+        """
+        Change the scan interval, taking effect immediately if already running.
+
+        Args:
+            interval_seconds: New interval between runs in seconds
+        """
+        self.interval_seconds = interval_seconds
+        if self.scheduler.running:
+            self.scheduler.reschedule_job(
+                "job-scan",
+                trigger=IntervalTrigger(seconds=interval_seconds, timezone=timezone.utc),
+            )
+        logger.info(
+            "Scheduler interval set to %d seconds",
+            interval_seconds,
+            extra={"event": "scheduler.rescheduled", "interval_seconds": interval_seconds},
         )
 
     def shutdown(self, wait: bool = False) -> None:

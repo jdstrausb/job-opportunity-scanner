@@ -136,6 +136,9 @@ class JobNormalizer:
             first_seen_at=first_seen_at,
             last_seen_at=last_seen_at,
             content_hash=content_hash,
+            secondary_locations=list(raw_job.secondary_locations),
+            is_remote=raw_job.is_remote,
+            location_country=raw_job.location_country,
         )
 
         matchable_text = MatchableText.from_job(job)

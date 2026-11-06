@@ -5,7 +5,7 @@ coordination between normalization and downstream pipeline steps.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 
 from app.domain.models import Job
 
@@ -29,6 +29,13 @@ class MatchResult:
         matched_fields: Dict mapping field name to set of matched terms found in that field
         snippets: List of text excerpts containing matched terms (for email)
         summary: Preformatted human-readable summary of matches
+        boundary_matches: Dict of terms that used boundary matching and their results
+        context_matches: Dict of terms that required context and whether context was found
+        role_suppressed: Whether notification was suppressed due to role filter (non-engineering title)
+        matched_profiles: Names of all matching search profiles, highest affinity score first
+        primary_profile: Name of the highest-scoring matching profile (None if no match)
+        affinity_score: Weighted affinity score of the primary profile
+        score_breakdown: Per-term points contributing to affinity_score
     """
 
     is_match: bool
@@ -40,16 +47,24 @@ class MatchResult:
     matched_fields: Dict[str, Set[str]] = field(default_factory=dict)
     snippets: List[str] = field(default_factory=list)
     summary: str = ""
+    boundary_matches: Dict[str, bool] = field(default_factory=dict)
+    context_matches: Dict[str, bool] = field(default_factory=dict)
+    role_suppressed: bool = False
+    matched_profiles: List[str] = field(default_factory=list)
+    primary_profile: Optional[str] = None
+    affinity_score: float = 0.0
+    score_breakdown: Dict[str, float] = field(default_factory=dict)
 
     def should_notify(self) -> bool:
         """Determine if a notification should be sent for this match.
 
-        Returns True if it's an overall match and no exclude terms were found.
+        Returns True if it's an overall match, no exclude terms were found,
+        and role hasn't suppressed the notification.
 
         Returns:
-            True if job is a match and has no excluded terms
+            True if job is a match and passes all suppression checks
         """
-        return self.is_match and not self.matched_exclude_terms
+        return self.is_match and not self.matched_exclude_terms and not self.role_suppressed
 
     @property
     def match_quality(self) -> str:
@@ -59,8 +74,11 @@ class MatchResult:
             "perfect" if all required terms and groups matched,
             "partial" if some groups missing,
             "excluded" if exclude terms found,
+            "suppressed" if role suppressed notification,
             "no-match" if required terms missing
         """
+        if self.role_suppressed:
+            return "suppressed"
         if self.matched_exclude_terms:
             return "excluded"
         if self.missing_required_terms:
@@ -84,12 +102,15 @@ class CandidateMatch:
         match_result: Output from keyword matching
         should_upsert: Whether to persist the job (new or content changed)
         should_notify: Whether to send a notification (is_match and no exclusions)
+        is_retry: True when the job is unchanged but its current version has no alert
+            record (e.g. a previous digest/SMTP send failed)
     """
 
     normalization_result: NormalizationResult
     match_result: MatchResult
     should_upsert: bool = True
     should_notify: bool = False
+    is_retry: bool = False  # Unchanged job whose current version was never alerted
 
     def __post_init__(self):
         """Compute derived fields after initialization."""
@@ -113,3 +134,8 @@ class CandidateMatch:
     def content_changed(self) -> bool:
         """Convenience accessor for whether content changed."""
         return self.normalization_result.content_changed
+
+    @property
+    def needs_alert(self) -> bool:
+        """Whether this candidate is eligible for an alert (changed, or retry of a lost alert)."""
+        return self.content_changed or self.is_retry

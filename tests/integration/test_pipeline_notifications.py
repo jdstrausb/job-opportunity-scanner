@@ -17,6 +17,8 @@ from app.config.models import (
     AdvancedConfig,
     AppConfig,
     EmailConfig,
+    FilteringRules,
+    NotificationMode,
     SearchCriteria,
     SourceConfig,
 )
@@ -64,10 +66,21 @@ def integration_app_config():
         email=EmailConfig(
             sender_email="jobs@example.com",
             subject_prefix="[Job Alert]",
+            # These tests assert one email per matching job.
+            notification_mode=NotificationMode.LEGACY,
         ),
         scan_interval="15m",
         scan_interval_seconds=900,
         advanced=AdvancedConfig(),
+        # Exercise pipeline/notification mechanics, not filtering.
+        filtering=FilteringRules(
+            max_job_age_days=730,
+            require_remote=False,
+            enable_seniority_filter=False,
+            enable_role_filter=False,
+            enable_experience_filter=False,
+            enable_domain_filter=False,
+        ),
     )
 
 
@@ -160,7 +173,7 @@ class TestPipelineNotificationsIntegration:
 
         # Mock adapters and SMTP
         with patch("app.pipeline.runner.get_adapter") as mock_get_adapter, patch(
-            "app.notifications.smtp_client.SMTPClient.send_email"
+            "app.notifications.smtp_client.SMTPClient.send"
         ) as mock_send_email:
 
             # Setup adapter mock
@@ -204,7 +217,7 @@ class TestPipelineNotificationsIntegration:
         )
 
         with patch("app.pipeline.runner.get_adapter") as mock_get_adapter, patch(
-            "app.notifications.smtp_client.SMTPClient.send_email"
+            "app.notifications.smtp_client.SMTPClient.send"
         ) as mock_send_email:
 
             mock_adapter = Mock()
@@ -242,7 +255,7 @@ class TestPipelineNotificationsIntegration:
         )
 
         with patch("app.pipeline.runner.get_adapter") as mock_get_adapter, patch(
-            "app.notifications.smtp_client.SMTPClient.send_email"
+            "app.notifications.smtp_client.SMTPClient.send"
         ) as mock_send_email:
 
             mock_adapter = Mock()
@@ -298,13 +311,13 @@ class TestPipelineNotificationsIntegration:
         )
 
         with patch("app.pipeline.runner.get_adapter") as mock_get_adapter, patch(
-            "app.notifications.smtp_client.SMTPClient.send_email"
+            "app.notifications.smtp_client.SMTPClient.send"
         ) as mock_send_email:
 
             mock_adapter = Mock()
 
             # First source succeeds, second fails
-            def side_effect(source_config):
+            def side_effect(source_config, *_args, **_kwargs):
                 if source_config.identifier == "testco":
                     mock_adapter.fetch_jobs.return_value = sample_matching_jobs
                 else:
@@ -354,7 +367,7 @@ class TestPipelineNotificationsIntegration:
         )
 
         with patch("app.pipeline.runner.get_adapter") as mock_get_adapter, patch(
-            "app.notifications.smtp_client.SMTPClient.send_email"
+            "app.notifications.smtp_client.SMTPClient.send"
         ) as mock_send_email:
 
             mock_adapter = Mock()
@@ -392,7 +405,7 @@ class TestPipelineNotificationsIntegration:
         )
 
         with patch("app.pipeline.runner.get_adapter") as mock_get_adapter, patch(
-            "app.notifications.smtp_client.SMTPClient.send_email"
+            "app.notifications.smtp_client.SMTPClient.send"
         ) as mock_send_email:
 
             mock_adapter = Mock()
@@ -409,13 +422,14 @@ class TestPipelineNotificationsIntegration:
                 alert_repo = AlertRepository(session)
 
                 # Should have 4 jobs (2 sources * 2 jobs)
-                all_jobs = job_repo.get_all_active()
-                assert len(all_jobs) >= 4
+                all_jobs = job_repo.get_by_source("greenhouse", "testco") + job_repo.get_by_source(
+                    "lever", "startup"
+                )
+                assert len(all_jobs) == 4
 
-                # Should have 4 alert records
-                # Query alert records to verify they exist
-                all_alerts = alert_repo.get_recent_alerts(limit=100)
-                assert len(all_alerts) >= 4
+                # Should have an alert record for each job's current version
+                for job in all_jobs:
+                    assert alert_repo.has_been_sent(job.job_key, job.content_hash)
 
     def test_smtp_failure_doesnt_crash_pipeline(
         self,
@@ -436,7 +450,7 @@ class TestPipelineNotificationsIntegration:
         )
 
         with patch("app.pipeline.runner.get_adapter") as mock_get_adapter, patch(
-            "app.notifications.smtp_client.SMTPClient.send_email"
+            "app.notifications.smtp_client.SMTPClient.send"
         ) as mock_send_email:
 
             mock_adapter = Mock()
@@ -475,7 +489,7 @@ class TestPipelineNotificationsIntegration:
         mixed_jobs = sample_matching_jobs[:1] + sample_non_matching_jobs[:1]
 
         with patch("app.pipeline.runner.get_adapter") as mock_get_adapter, patch(
-            "app.notifications.smtp_client.SMTPClient.send_email"
+            "app.notifications.smtp_client.SMTPClient.send"
         ) as mock_send_email:
 
             mock_adapter = Mock()

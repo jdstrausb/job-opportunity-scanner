@@ -8,9 +8,18 @@ This module defines the data structures used throughout the application:
 """
 
 from datetime import datetime
-from typing import Optional
+from enum import Enum
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
+
+
+class TriageStatus(str, Enum):
+    """User triage workflow state for a stored job."""
+
+    NEW = "new"
+    SAVED = "saved"
+    APPLIED = "applied"
 
 
 class RawJob(BaseModel):
@@ -29,6 +38,11 @@ class RawJob(BaseModel):
     url: str = Field(..., description="Direct link to the job posting")
     posted_at: Optional[datetime] = Field(None, description="When job was posted (UTC)")
     updated_at: Optional[datetime] = Field(None, description="When job was last updated (UTC)")
+    secondary_locations: List[str] = Field(
+        default_factory=list, description="Additional location strings from ATS"
+    )
+    is_remote: Optional[bool] = Field(None, description="Explicit remote flag from ATS")
+    location_country: Optional[str] = Field(None, description="Primary location country")
 
     @field_validator("external_id", "title", "company", "description", "url")
     @classmethod
@@ -106,12 +120,90 @@ class Job(BaseModel):
     content_hash: str = Field(
         ..., description="Hash of title + description + location for change detection"
     )
+    secondary_locations: List[str] = Field(
+        default_factory=list, description="Additional location strings from ATS"
+    )
+    is_remote: Optional[bool] = Field(None, description="Explicit remote flag from ATS")
+    location_country: Optional[str] = Field(None, description="Primary location country")
+    is_match: Optional[bool] = Field(
+        default=None, description="Whether job matched any active Search Profile (None = not yet scored)"
+    )
+    primary_profile: Optional[str] = Field(default=None, description="Winning Search Profile name")
+    matched_profiles: List[str] = Field(
+        default_factory=list, description="All matching Search Profile names by score desc"
+    )
+    affinity_score: float = Field(default=0.0, description="Weighted affinity score of primary profile")
+    score_breakdown: Dict[str, float] = Field(
+        default_factory=dict, description="Per-term points contributing to affinity_score"
+    )
+    match_snippets: List[str] = Field(
+        default_factory=list, description="Description excerpts with matched keywords"
+    )
+    matched_fields: Dict[str, List[str]] = Field(
+        default_factory=dict, description="Field name to sorted list of matched terms"
+    )
+    user_status: TriageStatus = Field(default=TriageStatus.NEW, description="User triage workflow state")
+
+    @field_validator("matched_fields", mode="before")
+    @classmethod
+    def normalize_matched_fields(cls, val: Any) -> Any:
+        """Coerce set/sequence values to sorted lists so JSON encoding never fails."""
+        if val is None:
+            return {}
+        if isinstance(val, dict):
+            return {k: sorted(list(v)) for k, v in val.items() if v}
+        return val
+
+    @field_validator("user_status", mode="before")
+    @classmethod
+    def default_user_status(cls, val: Any) -> Any:
+        """Treat NULL (legacy rows) as the 'new' triage status."""
+        return TriageStatus.NEW if val is None else val
+
+    @field_validator("matched_profiles", "match_snippets", mode="before")
+    @classmethod
+    def default_empty_list(cls, val: Any) -> Any:
+        """Treat NULL columns as empty lists."""
+        return [] if val is None else val
+
+    @field_validator("score_breakdown", mode="before")
+    @classmethod
+    def default_empty_dict(cls, val: Any) -> Any:
+        """Treat NULL columns as empty dicts."""
+        return {} if val is None else val
+
+    @field_validator("affinity_score", mode="before")
+    @classmethod
+    def default_affinity_score(cls, val: Any) -> Any:
+        """Treat NULL (legacy rows) as a zero score."""
+        return 0.0 if val is None else val
+
+    def apply_match_result(self, match_result: Any) -> "Job":
+        """Return a copy of this job carrying the explainability from a MatchResult.
+
+        ``user_status`` and all other fields are left untouched.
+        """
+        return self.model_copy(update=self._match_fields(match_result))
+
+    @staticmethod
+    def _match_fields(match_result: Any) -> Dict[str, Any]:
+        return {
+            "is_match": bool(match_result.is_match),
+            "primary_profile": match_result.primary_profile,
+            "matched_profiles": list(match_result.matched_profiles),
+            "affinity_score": float(match_result.affinity_score),
+            "score_breakdown": dict(match_result.score_breakdown),
+            "match_snippets": list(match_result.snippets),
+            "matched_fields": {
+                k: sorted(list(v)) for k, v in match_result.matched_fields.items() if v
+            },
+        }
 
     @field_validator("source_type")
     @classmethod
     def validate_source_type(cls, v: str) -> str:
         """Validate source type is one of the supported ATS types."""
-        valid_types = {"greenhouse", "lever", "ashby"}
+        valid_types = {"greenhouse", "lever", "ashby", "rss", "serpapi_google"}
         if v.lower() not in valid_types:
             raise ValueError(f"source_type must be one of {valid_types}, got: {v}")
         return v.lower()
@@ -202,7 +294,7 @@ class SourceStatus(BaseModel):
     @classmethod
     def validate_source_type(cls, v: str) -> str:
         """Validate source type is one of the supported ATS types."""
-        valid_types = {"greenhouse", "lever", "ashby"}
+        valid_types = {"greenhouse", "lever", "ashby", "rss", "serpapi_google"}
         if v.lower() not in valid_types:
             raise ValueError(f"source_type must be one of {valid_types}, got: {v}")
         return v.lower()
@@ -231,3 +323,40 @@ class SourceStatus(BaseModel):
         "last_error_at": None,
         "error_message": None,
     }}}
+
+
+class DismissalScope(str, Enum):
+    """What a dismissal applies to."""
+
+    JOB = "job"
+    COMPANY = "company"
+    SOURCE = "source"
+
+
+class DismissedItem(BaseModel):
+    """A persistent user mute for a job, company, or source.
+
+    item_key is stored stripped and lowercase: the job_key for JOB scope, the
+    company name for COMPANY scope, or the source identifier for SOURCE scope.
+    """
+
+    item_key: str = Field(..., description="Normalized (stripped, lowercase) key being muted")
+    scope: DismissalScope = Field(DismissalScope.JOB, description="What the key refers to")
+    reason: Optional[str] = Field(None, description="Optional reason for the dismissal")
+    dismissed_at: datetime = Field(..., description="When the item was dismissed (UTC)")
+
+    @field_validator("item_key")
+    @classmethod
+    def normalize_item_key(cls, v: str) -> str:
+        """Normalize key to stripped lowercase."""
+        return v.strip().lower()
+
+    @field_validator("dismissed_at")
+    @classmethod
+    def ensure_utc(cls, v: datetime) -> datetime:
+        """Ensure datetime is timezone-aware and in UTC."""
+        from datetime import timezone
+
+        if v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v.astimezone(timezone.utc)

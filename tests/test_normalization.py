@@ -261,6 +261,25 @@ class TestJobNormalizer:
         # Verify job_repo was called
         mock_job_repo.get_by_key.assert_called_once()
 
+    def test_normalize_preserves_location_metadata(
+        self, normalizer, raw_job, source_config, mock_job_repo
+    ):
+        """Location metadata on RawJob survives normalization."""
+        mock_job_repo.get_by_key.return_value = None
+        raw_job.secondary_locations = ["Remote - US", "Philadelphia, PA"]
+        raw_job.is_remote = True
+        raw_job.location_country = "USA"
+
+        result = normalizer.normalize(raw_job, source_config)
+
+        assert result.job.secondary_locations == ["Remote - US", "Philadelphia, PA"]
+        assert result.job.is_remote is True
+        assert result.job.location_country == "USA"
+
+        raw_job.is_remote = False
+        result = normalizer.normalize(raw_job, source_config)
+        assert result.job.is_remote is False
+
     def test_normalize_existing_job_unchanged(self, normalizer, raw_job, source_config, mock_job_repo):
         """Test normalizing a job that hasn't changed."""
         # Create an existing job with same content

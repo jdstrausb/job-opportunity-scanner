@@ -95,3 +95,53 @@ class TemplateRenderer:
             error_msg = f"Unexpected error during template rendering: {e}"
             logger.error(error_msg, exc_info=True)
             raise NotificationTemplateError(error_msg) from e
+
+    def render_digest(self, context: Dict) -> Dict[str, str]:
+        """Render digest email templates with the provided context.
+
+        Args:
+            context: Dictionary with digest template variables containing:
+                - scan_id, scan_date, total_matches, total_companies
+                - companies: list of company dicts with jobs
+
+        Returns:
+            Dictionary containing:
+            - subject: Rendered subject line (single line, no newlines)
+            - html_body: Rendered HTML body
+            - text_body: Rendered plain text body
+
+        Raises:
+            NotificationTemplateError: If template rendering fails
+        """
+        try:
+            # Load digest templates
+            subject_template = self.env.get_template("digest_subject.j2")
+            html_template = self.env.get_template("digest_body.html.j2")
+            text_template = self.env.get_template("digest_body.txt.j2")
+
+            # Render subject (strip whitespace and ensure single line)
+            subject = subject_template.render(context).strip().replace("\n", " ")
+
+            # Render bodies
+            html_body = html_template.render(context)
+            text_body = text_template.render(context)
+
+            logger.debug(
+                f"Rendered digest templates: {context.get('total_matches', 0)} matches, "
+                f"{context.get('total_companies', 0)} companies"
+            )
+
+            return {
+                "subject": subject,
+                "html_body": html_body,
+                "text_body": text_body,
+            }
+
+        except TemplateError as e:
+            error_msg = f"Digest template rendering failed: {e}"
+            logger.error(error_msg, exc_info=True)
+            raise NotificationTemplateError(error_msg) from e
+        except Exception as e:
+            error_msg = f"Unexpected error during digest template rendering: {e}"
+            logger.error(error_msg, exc_info=True)
+            raise NotificationTemplateError(error_msg) from e

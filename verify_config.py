@@ -23,10 +23,10 @@ def verify_config_structure():
     errors = []
 
     # Check required top-level keys
-    required_keys = ['sources', 'search_criteria']
-    for key in required_keys:
-        if key not in config:
-            errors.append(f"Missing required key: {key}")
+    if 'sources' not in config:
+        errors.append("Missing required key: sources")
+    if 'search_criteria' not in config and 'search_profiles' not in config:
+        errors.append("Missing required key: search_criteria or search_profiles")
 
     # Check sources structure
     if 'sources' in config:
@@ -46,7 +46,7 @@ def verify_config_structure():
                         errors.append(f"Source {idx} missing key: {key}")
 
                 if 'type' in source:
-                    valid_types = ['greenhouse', 'lever', 'ashby']
+                    valid_types = ['greenhouse', 'lever', 'ashby', 'rss', 'serpapi_google']
                     if source['type'] not in valid_types:
                         errors.append(f"Source {idx} has invalid type: {source['type']}")
 
@@ -62,6 +62,32 @@ def verify_config_structure():
 
             if not has_required and not has_groups:
                 errors.append("search_criteria must have at least one of: required_terms or keyword_groups")
+
+    # Check search_profiles structure
+    if 'search_profiles' in config:
+        profiles = config['search_profiles']
+        if not isinstance(profiles, list) or not profiles:
+            errors.append("'search_profiles' must be a non-empty list")
+        else:
+            seen_names = set()
+            for idx, profile in enumerate(profiles):
+                if not isinstance(profile, dict):
+                    errors.append(f"Profile {idx} is not a dictionary")
+                    continue
+                name = profile.get('name')
+                if not name:
+                    errors.append(f"Profile {idx} missing key: name")
+                elif name in seen_names:
+                    errors.append(f"Duplicate profile name: {name}")
+                else:
+                    seen_names.add(name)
+                if not profile.get('required_terms') and not profile.get('keyword_groups'):
+                    errors.append(
+                        f"Profile {idx} must have at least one of: required_terms or keyword_groups"
+                    )
+                weights = profile.get('affinity_weights', {})
+                if not isinstance(weights, dict):
+                    errors.append(f"Profile {idx} 'affinity_weights' must be a dictionary")
 
     # Check optional keys have correct types
     optional_checks = {
@@ -85,6 +111,8 @@ def verify_config_structure():
         print(f"  - {len(config['sources'])} sources configured")
         print(f"  - Scan interval: {config.get('scan_interval', 'not set')}")
 
+        if 'search_profiles' in config:
+            print(f"  - {len(config['search_profiles'])} search profiles")
         sc = config.get('search_criteria', {})
         print(f"  - {len(sc.get('required_terms', []))} required terms")
         print(f"  - {len(sc.get('keyword_groups', []))} keyword groups")

@@ -9,7 +9,7 @@ import logging
 import re
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TypeVar
 
 import requests
 
@@ -26,6 +26,14 @@ from .exceptions import (
 )
 
 logger = get_logger(__name__, component="adapter")
+
+T = TypeVar("T")
+
+# Query-string parameters whose values must never reach logs or exception text.
+_SECRET_PARAM_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])((?:api_key|apikey|access_token|client_secret|secret|token)=)[^&\s\"'<>]+",
+    re.IGNORECASE,
+)
 
 
 class BaseAdapter(ABC):
@@ -69,6 +77,15 @@ class BaseAdapter(ABC):
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": self.user_agent})
 
+    @staticmethod
+    def _sanitize_url(url: str) -> str:
+        """Mask secret query-parameter values (e.g. ``api_key=...``) in a URL or error text.
+
+        Works on arbitrary text, so it can also scrub ``str(exception)`` output
+        that embeds the request URL.
+        """
+        return _SECRET_PARAM_PATTERN.sub(r"\1<REDACTED>", url)
+
     @abstractmethod
     def fetch_jobs(self, source_config: SourceConfig) -> list[RawJob]:
         """Fetch jobs from ATS API.
@@ -99,17 +116,10 @@ class BaseAdapter(ABC):
         url: str,
         method: str = "GET",
         headers: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, str]] = None,
+        params: Optional[Dict[str, Any]] = None,
         json_data: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Make HTTP request with error handling.
-
-        Handles:
-        - Setting user agent and timeout
-        - Connection errors and timeouts
-        - HTTP error status codes
-        - Invalid JSON responses
-        - Logging of request details
+        """Make HTTP request with error handling and parse the JSON response.
 
         Args:
             url: URL to request
@@ -126,18 +136,84 @@ class BaseAdapter(ABC):
             AdapterTimeoutError: On request timeout
             AdapterResponseError: On invalid JSON or other response parsing errors
         """
-        # Prepare headers
-        request_headers = self._session.headers.copy()
+        response = self._send_request(url, method, headers, params, json_data)
+
+        safe_url = self._sanitize_url(url)
+        try:
+            data: Dict[str, Any] = response.json()
+        except (ValueError, requests.exceptions.JSONDecodeError) as e:
+            logger.error(
+                f"Failed to parse JSON response from {safe_url}",
+                extra={
+                    "event": "adapter.fetch.error",
+                    "error_type": "JSONDecodeError",
+                    "url": safe_url,
+                },
+            )
+            raise AdapterResponseError(
+                f"Failed to parse JSON response from {safe_url}: {self._sanitize_url(str(e))}"
+            ) from None
+
+        logger.debug(
+            "HTTP request succeeded",
+            extra={
+                "event": "adapter.fetch.succeeded",
+                "status_code": response.status_code,
+                "url": safe_url,
+            },
+        )
+        return data
+
+    def _make_text_request(
+        self,
+        url: str,
+        method: str = "GET",
+        headers: Optional[Dict[str, str]] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Make HTTP request and return the raw response body as text.
+
+        Shares session, timeout, and error handling with _make_request, for
+        non-JSON payloads such as RSS/Atom XML.
+
+        Raises:
+            AdapterHTTPError: On 4xx or 5xx HTTP status
+            AdapterTimeoutError: On request timeout
+        """
+        response = self._send_request(url, method, headers, params, None)
+        logger.debug(
+            "HTTP request succeeded",
+            extra={
+                "event": "adapter.fetch.succeeded",
+                "status_code": response.status_code,
+                "url": self._sanitize_url(url),
+            },
+        )
+        text: str = response.text
+        return text
+
+    def _send_request(
+        self,
+        url: str,
+        method: str,
+        headers: Optional[Dict[str, str]],
+        params: Optional[Dict[str, Any]],
+        json_data: Optional[Dict[str, Any]],
+    ) -> requests.Response:
+        """Send an HTTP request, translating failures into adapter exceptions."""
+        request_headers: Dict[str, Any] = dict(self._session.headers)
         if headers:
             request_headers.update(headers)
 
+        safe_url = self._sanitize_url(url)
+
         try:
             logger.debug(
-                f"HTTP {method} request to {url}",
+                f"HTTP {method} request to {safe_url}",
                 extra={
                     "event": "adapter.fetch.request",
                     "method": method,
-                    "url": url,
+                    "url": safe_url,
                     "timeout": self.timeout,
                 },
             )
@@ -151,83 +227,62 @@ class BaseAdapter(ABC):
                 timeout=self.timeout,
             )
 
-            # Check for HTTP errors
             if response.status_code >= 400:
-                # Determine if this is a retryable error (5xx) or fatal (4xx)
+                # 5xx is retryable on a later run, 4xx is fatal
                 is_retryable = response.status_code >= 500
                 event_name = "adapter.fetch.retryable_error" if is_retryable else "adapter.fetch.error"
                 log_level = logging.WARNING if is_retryable else logging.ERROR
 
                 logger.log(
                     log_level,
-                    f"HTTP {response.status_code} error from {url}",
+                    f"HTTP {response.status_code} error from {safe_url}",
                     extra={
                         "event": event_name,
                         "status_code": response.status_code,
-                        "url": url,
+                        "url": safe_url,
                         "retry_after_seconds": None,
-                    }
+                    },
                 )
 
                 raise AdapterHTTPError(
                     f"HTTP {response.status_code}: {response.reason}",
                     status_code=response.status_code,
-                    url=url,
+                    url=safe_url,
                 )
 
-            # Parse JSON response
-            try:
-                data = response.json()
-                logger.debug(
-                    "HTTP request succeeded",
-                    extra={
-                        "event": "adapter.fetch.succeeded",
-                        "status_code": response.status_code,
-                        "url": url,
-                    }
-                )
-                return data
-            except (ValueError, requests.exceptions.JSONDecodeError) as e:
-                logger.error(
-                    f"Failed to parse JSON response from {url}",
-                    extra={
-                        "event": "adapter.fetch.error",
-                        "error_type": "JSONDecodeError",
-                        "url": url,
-                    }
-                )
-                raise AdapterResponseError(
-                    f"Failed to parse JSON response from {url}: {e}"
-                ) from e
+            return response
 
-        except requests.exceptions.Timeout as e:
+        except requests.exceptions.Timeout:
             logger.warning(
-                f"Request to {url} timed out after {self.timeout} seconds",
+                f"Request to {safe_url} timed out after {self.timeout} seconds",
                 extra={
                     "event": "adapter.fetch.retryable_error",
                     "error_type": "Timeout",
-                    "url": url,
+                    "url": safe_url,
                     "timeout": self.timeout,
-                }
+                },
             )
+            # `from None`: the chained exception's text and traceback may carry the raw URL.
             raise AdapterTimeoutError(
-                f"Request to {url} timed out after {self.timeout} seconds",
-                url=url,
-            ) from e
+                f"Request to {safe_url} timed out after {self.timeout} seconds",
+                url=safe_url,
+            ) from None
         except requests.exceptions.RequestException as e:
+            # str(e) from urllib3 embeds the full request path, query string included.
+            safe_error = self._sanitize_url(str(e))
             logger.error(
-                f"Request to {url} failed: {e}",
+                f"Request to {safe_url} failed: {safe_error}",
                 extra={
                     "event": "adapter.fetch.error",
                     "error_type": type(e).__name__,
-                    "url": url,
-                }
+                    "url": safe_url,
+                },
             )
             raise AdapterHTTPError(
-                f"Request to {url} failed: {e}",
+                f"Request to {safe_url} failed: {safe_error}",
                 status_code=0,
-                url=url,
-            ) from e
+                url=safe_url,
+            ) from None
 
     def _clean_html(self, html_text: str) -> str:
         """Clean HTML tags and entities from text.
@@ -318,11 +373,11 @@ class BaseAdapter(ABC):
             )
             return None
 
-    def _truncate_jobs(self, jobs: list[RawJob], adapter_name: str, source_identifier: str) -> list[RawJob]:
+    def _truncate_jobs(self, jobs: list[T], adapter_name: str, source_identifier: str) -> list[T]:
         """Truncate job list to max_jobs limit if configured.
 
         Args:
-            jobs: List of RawJob objects
+            jobs: List of raw job items (any element type)
             adapter_name: Name of the adapter (for logging)
             source_identifier: Company identifier (for logging)
 

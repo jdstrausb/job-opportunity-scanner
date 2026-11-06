@@ -10,3 +10,4 @@ uv.lock
 .contextignore
 */__init__.py
 .git/
+docs/

@@ -206,11 +206,17 @@ class GreenhouseAdapter(BaseAdapter):
         return full_description
 
     def _transform_job(self, job: dict, source_config: SourceConfig) -> RawJob:
-        """Transform Greenhouse job object to RawJob domain model."""
+        """Transform Greenhouse job object to RawJob domain model.
+
+        Note: Greenhouse API doesn't provide structured secondary_locations or is_remote flags
+        in the standard public API. These fields are set to default values for future enhancement.
+        """
         final_location = self._get_combined_location(job)
         full_description = self._get_enriched_description(job, source_config)
 
         # Create RawJob with transformed fields
+        # TODO: Extract secondary_locations if Greenhouse adds API support
+        # TODO: Extract location_country from structured location data if available
         return RawJob(
             external_id=str(job["id"]),
             title=job["title"],
@@ -220,4 +226,7 @@ class GreenhouseAdapter(BaseAdapter):
             url=job["absolute_url"],
             posted_at=self._parse_timestamp(job.get("first_published")),
             updated_at=self._parse_timestamp(job.get("updated_at")),
+            secondary_locations=[],  # Not provided by Greenhouse API
+            is_remote=None,  # Not provided by Greenhouse API
+            location_country=None,  # Could be extracted from location string in future
         )

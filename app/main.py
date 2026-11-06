@@ -11,23 +11,33 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
+import uvicorn  # noqa: E402
+
+from app.api import create_app  # noqa: E402
 from app.config.duration import parse_duration, validate_duration_range
 from app.config.environment import EnvironmentConfig
 from app.config.exceptions import ConfigurationError
 from app.config.loader import load_config
+from app.config.manager import ConfigManager  # noqa: E402
 from app.config.models import AppConfig
 from app.logging import get_logger
 from app.logging.config import configure_logging
 from app.logging.context import log_context
 from app.matching.engine import KeywordMatcher
 from app.notifications.service import NotificationService
-from app.persistence.database import close_database, init_database
+from app.domain.models import DismissalScope
+from app.persistence.database import close_database, get_session, init_database
+from app.persistence.repositories import DismissedItemRepository, reevaluate_stored_jobs
 from app.pipeline import ScanPipeline
 from app.scheduler import SchedulerService
 
 logger = get_logger(__name__, component="cli")
+
+DEFAULT_UI_HOST = "127.0.0.1"
+DEFAULT_UI_PORT = 8000
+SPA_BUILD_DIR = Path("frontend/build")
 
 
 def load_runtime_config(
@@ -78,6 +88,107 @@ def load_runtime_config(
     return app_config, env_config
 
 
+def parse_dismissal_target(target: str) -> Tuple[DismissalScope, str]:
+    """
+    Parse a dismissal target into (scope, key).
+
+    Accepts "<job_key>" (defaults to job scope) or "<scope>:<key>" where scope
+    is one of job, company, or source. Only the first colon separates the scope,
+    so keys may themselves contain colons.
+
+    Raises:
+        ValueError: If the scope prefix is not valid or the key is empty.
+    """
+    target = target.strip()
+    if ":" in target:
+        prefix, key = target.split(":", 1)
+        try:
+            scope = DismissalScope(prefix.strip().lower())
+        except ValueError:
+            valid = ", ".join(s.value for s in DismissalScope)
+            raise ValueError(f"Invalid scope '{prefix}' (expected one of: {valid})") from None
+    else:
+        scope, key = DismissalScope.JOB, target
+
+    key = key.strip()
+    if not key:
+        raise ValueError("Dismissal target must not be empty")
+    return scope, key
+
+
+def handle_dismissal_commands(args: argparse.Namespace) -> Optional[int]:
+    """
+    Run dismissal management commands if any dismissal flag was given.
+
+    Resolves DATABASE_URL directly so no SMTP credentials or config file are
+    required.
+
+    Returns:
+        Exit code if a dismissal command was handled, otherwise None.
+    """
+    if not (args.dismiss or args.undismiss or args.list_dismissed):
+        return None
+
+    if args.dismiss_reason and not args.dismiss:
+        print("Error: --dismiss-reason requires --dismiss", file=sys.stderr)
+        return 1
+
+    try:
+        dismiss_target = parse_dismissal_target(args.dismiss) if args.dismiss else None
+        undismiss_target = parse_dismissal_target(args.undismiss) if args.undismiss else None
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    database_url = os.getenv("DATABASE_URL", "sqlite:///./data/job_scanner.db")
+    try:
+        init_database(database_url)
+        with get_session() as session:
+            repo = DismissedItemRepository(session)
+
+            if dismiss_target:
+                scope, key = dismiss_target
+                item = repo.dismiss(key, scope=scope, reason=args.dismiss_reason)
+                print(f"Dismissed {item.scope.value}: {item.item_key}")
+
+            if undismiss_target:
+                scope, key = undismiss_target
+                if repo.undismiss(key, scope=scope):
+                    print(f"Removed dismissal {scope.value}: {key.lower()}")
+                else:
+                    print(f"Dismissal not found: {scope.value}: {key.lower()}")
+
+            if args.list_dismissed:
+                items = repo.list_all()
+                if not items:
+                    print("No dismissed items.")
+                else:
+                    rows = [
+                        (
+                            i.scope.value,
+                            i.item_key,
+                            i.dismissed_at.strftime("%Y-%m-%d %H:%M"),
+                            i.reason or "",
+                        )
+                        for i in items
+                    ]
+                    headers = ("SCOPE", "KEY", "DISMISSED (UTC)", "REASON")
+                    widths = [
+                        max(len(headers[c]), *(len(r[c]) for r in rows)) for c in range(4)
+                    ]
+                    fmt = "  ".join(f"{{:<{w}}}" for w in widths)
+                    print(fmt.format(*headers).rstrip())
+                    print(fmt.format(*("-" * w for w in widths)).rstrip())
+                    for row in rows:
+                        print(fmt.format(*row).rstrip())
+        return 0
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    finally:
+        close_database()
+
+
 def main() -> int:
     """
     Main entry point for the Job Opportunity Scanner.
@@ -89,6 +200,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Job Opportunity Scanner - Automated job posting monitoring and notification service"
     )
+    try:
+        ui_port_default = int(os.getenv("UI_PORT") or DEFAULT_UI_PORT)
+    except ValueError:
+        parser.error(f"UI_PORT must be an integer, got {os.getenv('UI_PORT')!r}")
     parser.add_argument(
         "--config",
         type=Path,
@@ -101,13 +216,57 @@ def main() -> int:
         help="Run a single scan immediately and exit (useful for testing)",
     )
     parser.add_argument(
+        "--host",
+        default=os.getenv("UI_HOST") or DEFAULT_UI_HOST,
+        help="Web UI bind address (default: UI_HOST or 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=ui_port_default,
+        help="Web UI port (default: UI_PORT or 8000)",
+    )
+    parser.add_argument(
+        "--no-ui",
+        action="store_true",
+        help="Run the daemon in headless mode without the web UI",
+    )
+    parser.add_argument(
         "--log-level",
         default=None,
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         help="Log level (overrides config and environment)",
     )
+    parser.add_argument(
+        "--dismiss",
+        metavar="TARGET",
+        default=None,
+        help="Dismiss a job, company, or source: <job_key>, job:<key>, company:<name>, or source:<id>",
+    )
+    parser.add_argument(
+        "--dismiss-reason",
+        metavar="TEXT",
+        default=None,
+        help="Optional reason to store with --dismiss",
+    )
+    parser.add_argument(
+        "--undismiss",
+        metavar="TARGET",
+        default=None,
+        help="Remove a dismissal (same TARGET format as --dismiss)",
+    )
+    parser.add_argument(
+        "--list-dismissed",
+        action="store_true",
+        help="List all active dismissals and exit",
+    )
 
     args = parser.parse_args()
+
+    # Dismissal management runs standalone: no config, SMTP, or scan required
+    dismissal_exit_code = handle_dismissal_commands(args)
+    if dismissal_exit_code is not None:
+        return dismissal_exit_code
 
     try:
         # Step 1: Load configuration early (before logging for format detection)
@@ -127,6 +286,7 @@ def main() -> int:
                 "config_path": str(args.config),
                 "log_level": env_config.log_level,
                 "manual_run": args.manual_run,
+                "ui_enabled": not (args.manual_run or args.no_ui),
             },
         )
 
@@ -148,7 +308,7 @@ def main() -> int:
 
         # Step 4: Instantiate shared service singletons
         notification_service = NotificationService()
-        keyword_matcher = KeywordMatcher(app_config.search_criteria)
+        keyword_matcher = KeywordMatcher(app_config.get_effective_profiles())
 
         logger.info(
             "Services initialized",
@@ -156,6 +316,26 @@ def main() -> int:
                 "event": "services.initialized",
             },
         )
+
+        # Step 4b: Score legacy rows stored before Match Explainability existed.
+        # A backfill failure must not keep the scanner from starting.
+        try:
+            with get_session() as session:
+                unscored_count = reevaluate_stored_jobs(
+                    session, keyword_matcher, only_unscored=True
+                )
+            if unscored_count > 0:
+                logger.info(
+                    "Re-evaluated %d legacy stored jobs",
+                    unscored_count,
+                    extra={"event": "startup.reevaluation.completed", "count": unscored_count},
+                )
+        except Exception as e:
+            logger.exception(
+                "Startup re-evaluation failed: %s",
+                e,
+                extra={"event": "startup.reevaluation.failed", "error": str(e)},
+            )
 
         # Step 5: Build pipeline
         pipeline = ScanPipeline(
@@ -221,7 +401,46 @@ def main() -> int:
                 shutdown_event=shutdown_event,
             )
 
-            # Set up signal handlers for graceful shutdown
+            if not args.no_ui:
+                # Default daemon: Uvicorn serves the API and SPA, and the app's
+                # lifespan starts/stops the scheduler so scans share the pipeline lock.
+                config_manager = ConfigManager(
+                    args.config, pipeline=pipeline, scheduler_service=scheduler_service
+                )
+                fastapi_app = create_app(
+                    pipeline=pipeline,
+                    scheduler_service=scheduler_service,
+                    config_manager=config_manager,
+                    static_dir=SPA_BUILD_DIR,
+                    manage_scheduler_lifespan=True,
+                )
+                logger.info(
+                    "Serving web UI on http://%s:%d",
+                    args.host,
+                    args.port,
+                    extra={"event": "service.ui.starting", "host": args.host, "port": args.port},
+                )
+                try:
+                    # Uvicorn installs its own SIGINT/SIGTERM handling and runs the
+                    # lifespan shutdown (scheduler.shutdown) before returning.
+                    # log_config=None keeps the application's logging setup intact.
+                    # ws="none": the UI uses no websockets, and uvicorn's auto-detection
+                    # crashes on the locked websockets 10.4 (pinned by pyppeteer).
+                    uvicorn.run(
+                        fastapi_app, host=args.host, port=args.port, log_config=None, ws="none"
+                    )
+                finally:
+                    close_database()
+                logger.info(
+                    "Job Opportunity Scanner stopped",
+                    extra={
+                        "event": "service.stopping",
+                        "uptime_seconds": round(time.time() - start_time, 2),
+                    },
+                )
+                return 0
+
+            # Headless daemon (--no-ui): set up signal handlers for graceful shutdown
             def signal_handler(signum, frame):
                 logger.info(
                     f"Received signal {signum}, shutting down",

@@ -55,9 +55,8 @@ def db_session(tmp_path):
     db_file = tmp_path / "test_notifications.db"
     db_url = f"sqlite:///{db_file}"
     init_database(db_url)
-    session = get_session()
-    yield session
-    session.close()
+    with get_session() as session:
+        yield session
     close_database()
 
 

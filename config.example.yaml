@@ -2,7 +2,9 @@
 # Copy this file to config.yaml and customize for your use case
 
 # List of ATS sources to monitor
+# You can specify sources explicitly or use wildcards with the registry system
 sources:
+  # Explicit sources: Specify each company individually
   - name: "Tech Corp Careers"
     type: "greenhouse"
     identifier: "techcorp"
@@ -17,6 +19,53 @@ sources:
     type: "ashby"
     identifier: "enterprise-inc"
     enabled: false
+
+  # RSS / Atom feed source (Optional): identifier is the feed URL.
+  # options.default_location is used when feed items carry no location tag.
+  #
+  # - name: "Code4Lib Jobs"
+  #   type: "rss"
+  #   identifier: "https://jobs.code4lib.org/jobs.rss"
+  #   enabled: true
+  #   options:
+  #     default_location: "Remote"
+  #
+  # Google search discovery via SerpAPI (Optional): identifier is the search query.
+  # Requires SERPAPI_API_KEY. Hits on Greenhouse/Lever/Ashby job URLs are hydrated
+  # from the ATS JSON API; other hits fall back to the result title and snippet.
+  #
+  # - name: "Dork: Data Engineer Remote"
+  #   type: "serpapi_google"
+  #   identifier: 'site:boards.greenhouse.io OR site:jobs.lever.co OR site:jobs.ashbyhq.com "data engineer" remote'
+  #   enabled: true
+  #   options:
+  #     num_results: 20
+  #
+  # Registry System (Optional): Use wildcard identifier "*" to scan all
+  # enabled companies from the registry for that ATS type.
+  # Registry files are located in data/registries/ directory.
+  # Uncomment to enable:
+  #
+  # - name: "All Greenhouse Companies"
+  #   type: "greenhouse"
+  #   identifier: "*"
+  #   enabled: true
+  #
+  # - name: "All Lever Companies"
+  #   type: "lever"
+  #   identifier: "*"
+  #   enabled: true
+  #
+  # - name: "All Ashby Companies"
+  #   type: "ashby"
+  #   identifier: "*"
+  #   enabled: true
+  #
+  # Notes on Registry System:
+  # - Wildcards expand at startup to all enabled companies in the registry
+  # - Edit data/registries/*.json to add/remove companies or disable them
+  # - You can mix explicit sources with wildcards
+  # - Changes require application restart to take effect
 
 # Polling interval for scanning jobs
 # Supported formats: ISO-8601 duration (e.g., PT15M) or human-readable (e.g., 15m)
@@ -46,6 +95,229 @@ search_criteria:
     - "legacy"
     - "on-site"
     - "relocation-required"
+
+  # Boundary terms: Terms that require word-boundary matching to avoid false positives
+  # Example: "rails" with boundaries won't match "guardrails" or "payment rails"
+  boundary_terms:
+    - "rails"
+    - "go"
+
+  # Contextual terms: Terms that only count as matches if context terms are also present
+  # Example: "rails" only counts if "ruby" is also found in the posting
+  contextual_terms:
+    rails:
+      - "ruby"
+    go:
+      - "golang"
+
+# Job filtering rules applied before keyword matching
+# These filters run early in the pipeline to reduce unnecessary processing
+filtering:
+  # Maximum age for jobs in days (based on publishedAt or updatedAt timestamp)
+  # Jobs older than this threshold are filtered out
+  # Range: 1-730 days (default: 180 days = 6 months)
+  max_job_age_days: 180
+
+  # Fall back to updatedAt if publishedAt is missing
+  # Some ATS providers don't provide publishedAt timestamps
+  use_updated_at_fallback: true
+
+  # Treat jobs with recent updatedAt as fresh even if publishedAt is old
+  # This allows recently refreshed old postings to be included
+  treat_recent_update_as_fresh: true
+
+  # Filter out non-remote jobs
+  # When true, only jobs matching remote_synonyms or with explicit remote flags pass
+  # Set to false to accept all locations
+  require_remote: true
+
+  # Location strings considered as remote-acceptable (case-insensitive)
+  # Jobs with primary or secondary locations matching these terms are accepted
+  remote_synonyms:
+    - "remote"
+    - "remote - us"
+    - "remote (us)"
+    - "remote us"
+    - "remote - usa"
+    - "remote usa"
+    - "remote - united states"
+    - "remote united states"
+    - "work from home"
+    - "wfh"
+    - "anywhere"
+    - "hybrid"
+
+  # Primary location countries that are acceptable (case-insensitive)
+  # Jobs with primary locations in other countries are filtered out
+  # This helps avoid international positions with tax/legal/timezone constraints
+  acceptable_countries:
+    - "united states"
+    - "us"
+    - "usa"
+    - "u.s."
+    - "u.s.a."
+
+  # Remote region filtering - region tags that indicate acceptable remote locations
+  remote_allowed_regions:
+    - "americas"
+    - "us"
+    - "usa"
+    - "united states"
+
+  # Region tags that indicate blocked remote locations (EMEA, APAC, etc.)
+  remote_blocked_regions:
+    - "emea"
+    - "apac"
+    - "india"
+    - "uk"
+    - "canada"
+
+  # Allow Canada remote jobs if posting explicitly allows US applicants
+  allow_remote_canada_if_us_allowed: true
+
+  # Phrases in job description that indicate US applicants are eligible
+  # Used for Canada exception handling
+  us_eligibility_phrases:
+    - "us or canada"
+    - "canada or us"
+    - "united states or canada"
+    - "open to us applicants"
+    - "north america"
+
+  # Cities where hybrid work is acceptable (normalized lowercase)
+  # Example: User lives in Philadelphia, PA
+  allow_hybrid_cities:
+    - "philadelphia, pa"
+    - "philadelphia"
+
+  # Require structured remote signals (is_remote flag or location match)
+  # Set to false to allow description-based fallback detection
+  require_remote_structured: true
+
+  # Keywords to search in description for remote eligibility
+  # Only used if require_remote_structured is false
+  remote_description_keywords: []
+
+  # Seniority filtering - title terms that indicate seniority levels to block
+  # Helps filter out senior/staff/principal roles when targeting mid-level
+  seniority_block_terms:
+    - "senior"
+    - "sr"
+    - "staff"
+    - "principal"
+    - "manager"
+    - "lead"
+    - "director"
+
+  # Title terms that override seniority blocking (allow specific cases)
+  seniority_allow_terms: []
+
+  # Experience filtering thresholds
+  # max_years_experience: soft threshold (jobs up to this are accepted)
+  # hard_block_years: hard block (jobs requiring this many years or more are rejected)
+  max_years_experience: 8
+  hard_block_years: 9
+
+  # Role family filtering - title terms that indicate allowed role families
+  role_allow_terms:
+    - "developer"
+    - "engineer"
+    - "engineering"
+
+  # Title terms that indicate blocked role families (non-engineering roles)
+  role_block_terms:
+    - "recruiter"
+    - "hr"
+    - "human resources"
+    - "people ops"
+    - "sales"
+    - "account executive"
+    - "support"
+    - "customer success"
+    - "compliance"
+    - "legal"
+    - "marketing"
+    - "analyst"
+    - "project manager"
+    - "scrum master"
+
+  # Feature toggles for granular control
+  enable_seniority_filter: true
+  enable_role_filter: true
+  enable_experience_filter: true
+  enable_domain_filter: true
+
+  # Company / industry domain filtering (applied before persistence)
+  # blocked_companies: company names to reject (case-insensitive, exact match)
+  blocked_companies:
+    - "crossover"
+    - "bairesdev"
+
+  # blocked_domains: industry terms or URL hostnames to reject.
+  # Terms are matched on word boundaries in the title/description, so "bet"
+  # will NOT match "better". Hostnames (e.g. "badcorp.com") are matched
+  # against the posting URL host (subdomains included).
+  blocked_domains:
+    - "web3"
+    - "sports betting"
+    - "defense contractor"
+    # - "badcorp.com"
+
+  # domain_allow_terms: terms that override blocked_domains when present in the
+  # title or description (does not override blocked_companies)
+  domain_allow_terms: []
+
+# Multi-track search profiles (optional alternative to `search_criteria`)
+# Define either `search_criteria` (single track, above) or `search_profiles`.
+# A config with only `search_criteria` behaves as one profile named "default".
+# A config with only `search_profiles` uses its first enabled profile as the
+# legacy `search_criteria`. Profile names must be unique.
+#
+# Each profile accepts the same required_terms / keyword_groups / exclude_terms
+# as `search_criteria`, plus:
+#   enabled                - set false to skip the profile (default: true)
+#   affinity_weights       - term -> weight for scoring; keys are lowercased and
+#                            must not also appear in the profile's exclude_terms
+#   title_boost_multiplier - weight multiplier when a term is in the job title
+#                            (1.0 - 10.0, default: 2.0)
+#   min_affinity_score     - minimum score required to match (default: 0.0)
+#
+# search_profiles:
+#   - name: "backend_rails"
+#     required_terms: ["rails"]
+#     keyword_groups:
+#       - ["remote", "distributed"]
+#     exclude_terms: ["junior", "intern"]
+#     affinity_weights:
+#       rails: 3.0
+#       postgresql: 1.5
+#       sidekiq: 1.0
+#     title_boost_multiplier: 2.0
+#     min_affinity_score: 3.0
+#
+#   - name: "scholarly_open_science"
+#     keyword_groups:
+#       - ["open science", "scholarly communication", "research infrastructure"]
+#     exclude_terms: ["sales"]
+#     affinity_weights:
+#       "open science": 3.0
+#       "scholarly communication": 2.5
+#       metadata: 1.0
+#       "open access": 1.5
+#     title_boost_multiplier: 1.5
+#     min_affinity_score: 2.0
+#
+#   - name: "backend_python"
+#     required_terms: ["python"]
+#     keyword_groups:
+#       - ["backend", "back-end", "api"]
+#     exclude_terms: ["django", "intern"]
+#     affinity_weights:
+#       fastapi: 2.0
+#       sqlalchemy: 1.5
+#       postgresql: 1.0
+#     title_boost_multiplier: 2.0
+#     min_affinity_score: 2.0
 
 # Email notification configuration
 # Note: Email credentials should be set via environment variables:

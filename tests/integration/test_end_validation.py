@@ -23,6 +23,7 @@ from app.config.models import (
     AdvancedConfig,
     AppConfig,
     EmailConfig,
+    FilteringRules,
     LoggingConfig,
     SearchCriteria,
     SourceConfig,
@@ -91,6 +92,16 @@ def end_validation_app_config():
         scan_interval="15m",
         scan_interval_seconds=900,
         advanced=AdvancedConfig(),
+        # These tests validate pipeline mechanics (persist/match/notify/dedupe), not
+        # filtering, so disable every filter that could reject the recorded fixtures.
+        filtering=FilteringRules(
+            max_job_age_days=730,
+            require_remote=False,
+            enable_seniority_filter=False,
+            enable_role_filter=False,
+            enable_experience_filter=False,
+            enable_domain_filter=False,
+        ),
     )
 
 
@@ -207,8 +218,8 @@ def test_full_pipeline_sample_fixture(
             assert "Senior Python Engineer (Remote)" in testcompanyb_titles
             assert "Lead Backend Engineer - Python" in testcompanyb_titles
 
-        # Verify SMTP was called correctly
-        assert mock_send.call_count == 5, "Should attempt to send 5 emails"
+        # Verify SMTP was called correctly (digest mode: one run-wide digest)
+        assert mock_send.call_count == 1, "Should send 1 global digest email"
 
         # Verify structured logging events
         log_records = [rec for rec in caplog.records]
@@ -261,12 +272,12 @@ def test_repeated_run_dedupes_alerts(
         # Enable logging
         caplog.set_level("INFO")
 
-        # First run - should send notifications
+        # First run - should send notifications (digest mode: 1 global digest)
         result1 = pipeline.run_once()
         assert result1.total_notified == 5, "First run should send 5 notifications"
 
         first_run_email_count = mock_send.call_count
-        assert first_run_email_count == 5, "First run should call send 5 times"
+        assert first_run_email_count == 1, "First run should send 1 global digest email"
 
         # Verify alerts in database after first run
         assert result1.alerts_sent == 5, "Should have 5 alerts after first run"
