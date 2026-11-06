@@ -214,10 +214,14 @@ class SourceRepository:
         """
         self.session = session
 
-    def get_by_identifier(self, source_identifier: str) -> Optional[SourceStatus]:
-        """Retrieve source status by identifier.
+    def get(self, source_type: str, source_identifier: str) -> Optional[SourceStatus]:
+        """Retrieve the health record for one source.
+
+        Sources are keyed by ATS type and identifier together, because the same
+        identifier can be configured on more than one ATS.
 
         Args:
+            source_type: ATS type (greenhouse, lever, ashby, rss, serpapi_google)
             source_identifier: Company identifier in the ATS
 
         Returns:
@@ -227,20 +231,15 @@ class SourceRepository:
             PersistenceError: If database error occurs
         """
         try:
-            stmt = select(SourceStatusModel).where(
-                SourceStatusModel.source_identifier == source_identifier
+            source_model = self.session.get(
+                SourceStatusModel,
+                {"source_type": source_type, "source_identifier": source_identifier},
             )
-            result = self.session.execute(stmt)
-            source_model = result.scalar_one_or_none()
-
-            if source_model is None:
-                return None
-
-            return source_model.to_domain()
+            return source_model.to_domain() if source_model is not None else None
 
         except SQLAlchemyError as e:
             logger.error(
-                f"Error retrieving source by identifier {source_identifier}: {e}", exc_info=True
+                f"Error retrieving source {source_type}/{source_identifier}: {e}", exc_info=True
             )
             raise PersistenceError(f"Failed to retrieve source: {e}") from e
 
@@ -297,10 +296,10 @@ class SourceRepository:
 
     def record_fetch(
         self,
+        source_type: str,
         source_identifier: str,
         *,
         name: str,
-        source_type: str,
         at: datetime,
         error: Optional[str] = None,
     ) -> SourceStatus:
@@ -308,13 +307,13 @@ class SourceRepository:
 
         A success sets ``last_success_at`` and clears any previous error. A failure
         sets ``last_error_at`` and ``error_message`` and leaves ``last_success_at``
-        untouched, so the last known-good scan time survives outages. ``name`` and
-        ``source_type`` are refreshed on every call. Creates the row if missing.
+        untouched, so the last known-good scan time survives outages. ``name`` is
+        refreshed on every call. Creates the row if missing.
 
         Args:
+            source_type: ATS type (greenhouse, lever, ashby, rss, serpapi_google)
             source_identifier: Company identifier in the ATS
             name: Human-readable source name
-            source_type: ATS type (greenhouse, lever, ashby, rss, serpapi_google)
             at: When the fetch completed (UTC)
             error: Error description if the fetch failed, None on success
 
@@ -325,13 +324,17 @@ class SourceRepository:
             PersistenceError: If database error occurs
         """
         try:
-            model = self.session.get(SourceStatusModel, source_identifier)
+            model = self.session.get(
+                SourceStatusModel,
+                {"source_type": source_type, "source_identifier": source_identifier},
+            )
             if model is None:
-                model = SourceStatusModel(source_identifier=source_identifier)
+                model = SourceStatusModel(
+                    source_type=source_type, source_identifier=source_identifier
+                )
                 self.session.add(model)
 
             model.name = name
-            model.source_type = source_type
             if error is None:
                 model.last_success_at = at
                 model.last_error_at = None
@@ -345,7 +348,7 @@ class SourceRepository:
 
         except SQLAlchemyError as e:
             logger.error(
-                f"Error recording fetch for source {source_identifier}: {e}", exc_info=True
+                f"Error recording fetch for source {source_type}/{source_identifier}: {e}", exc_info=True
             )
             raise PersistenceError(f"Failed to record source fetch: {e}") from e
 

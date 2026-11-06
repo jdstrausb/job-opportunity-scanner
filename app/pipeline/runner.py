@@ -314,9 +314,9 @@ class ScanPipeline:
                         )
 
                         source_repo.record_fetch(
+                            source_config.type,
                             source_config.identifier,
                             name=source_config.name,
-                            source_type=source_config.type,
                             at=scan_timestamp,
                         )
 
@@ -338,9 +338,9 @@ class ScanPipeline:
 
                         # Preserves last_success_at from earlier scans
                         source_repo.record_fetch(
+                            source_config.type,
                             source_config.identifier,
                             name=source_config.name,
-                            source_type=source_config.type,
                             at=scan_timestamp,
                             error=str(e),
                         )

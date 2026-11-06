@@ -135,8 +135,8 @@ The service follows a modular pipeline architecture that processes each source s
 - `posted_at`, `updated_at` - Source-provided timestamps
 
 **sources table:**
-- `source_identifier` (PK)
-- `last_success_at`, `last_error_at` - Health tracking
+- `source_type`, `source_identifier` (composite PK) - The same slug may exist on several ATS types
+- `last_success_at`, `last_error_at` - Health tracking; written only via `SourceRepository.record_fetch()`, which keeps `last_success_at` when a fetch fails
 - `error_message` - Last error for troubleshooting
 
 **alerts_sent table:**

@@ -14,7 +14,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, Dialect, Index, String, Text, inspect, text
+from sqlalchemy import JSON, Boolean, Dialect, Index, MetaData, String, Text, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
@@ -161,12 +161,13 @@ class SourceStatusModel(Base):
 
     __tablename__ = "sources"
 
-    # Primary key
+    # Composite primary key: the same slug can exist on several ATS types
+    # (e.g. "acme" on both Greenhouse and Ashby), matching AppConfig's
+    # (type, identifier) uniqueness rule. Column order matches the table
+    # created by earlier versions so the legacy-key rebuild can copy rows.
     source_identifier: Mapped[str] = mapped_column(String(255), primary_key=True)
-
-    # Source information
     name: Mapped[str] = mapped_column(String(255))
-    source_type: Mapped[str] = mapped_column(String(50))
+    source_type: Mapped[str] = mapped_column(String(50), primary_key=True)
 
     # Health tracking
     last_success_at: Mapped[datetime | None] = mapped_column(UtcIsoString)
@@ -294,6 +295,51 @@ def _ensure_table_columns(engine: Engine) -> None:
             conn.execute(text(f"ALTER TABLE jobs ADD COLUMN {name} {sql_type}"))
 
 
+_SOURCES_REBUILD_TABLE = "sources_rebuild"
+
+
+def _ensure_sources_primary_key(engine: Engine) -> None:
+    """Rebuild a legacy sources table keyed on source_identifier alone.
+
+    SQLite cannot alter a primary key in place, so the table is copied into a
+    new table with the current (source_type, source_identifier) key and swapped
+    in. Every legacy row is unique on source_identifier, so it is also unique on
+    the composite key and the copy cannot conflict. Idempotent: a table that
+    already has the composite key is left alone.
+
+    Args:
+        engine: SQLAlchemy engine instance
+    """
+    sources = Base.metadata.tables[SourceStatusModel.__tablename__]
+    expected_pk = {col.name for col in sources.primary_key.columns}
+    inspector = inspect(engine)
+    current_pk = set(inspector.get_pk_constraint(sources.name)["constrained_columns"])
+    if current_pk == expected_pk:
+        return
+
+    logger.info(
+        "Rebuilding %s primary key: %s -> %s",
+        sources.name,
+        sorted(current_pk),
+        sorted(expected_pk),
+    )
+    rebuild = sources.to_metadata(MetaData(), name=_SOURCES_REBUILD_TABLE)
+    columns = ", ".join(col.name for col in sources.columns)
+    with engine.begin() as conn:
+        # A leftover from an interrupted earlier attempt holds no data the
+        # legacy table lacks, so it is safe to discard.
+        rebuild.drop(conn, checkfirst=True)
+        rebuild.create(conn)
+        conn.execute(
+            text(
+                f"INSERT INTO {_SOURCES_REBUILD_TABLE} ({columns}) "
+                f"SELECT {columns} FROM {sources.name}"
+            )
+        )
+        conn.execute(text(f"DROP TABLE {sources.name}"))
+        conn.execute(text(f"ALTER TABLE {_SOURCES_REBUILD_TABLE} RENAME TO {sources.name}"))
+
+
 def create_schema(engine: Engine) -> None:
     """Create all tables and indexes if they don't exist (idempotent).
 
@@ -311,6 +357,9 @@ def create_schema(engine: Engine) -> None:
 
         # Add columns introduced after the table was first created
         _ensure_table_columns(engine)
+
+        # Replace primary keys that SQLite cannot alter in place
+        _ensure_sources_primary_key(engine)
 
         tables = inspect(engine).get_table_names()
         logger.info("Database schema ready. Tables: %s", ", ".join(tables))

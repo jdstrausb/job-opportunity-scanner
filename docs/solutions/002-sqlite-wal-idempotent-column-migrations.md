@@ -48,6 +48,15 @@ Because SQLite in WAL mode permits concurrent readers but enforces single-writer
 - **Connection Locking under WAL**: Executing schema modifications across loose connections outside of `engine.begin()` can cause `sqlite3.OperationalError: database is locked` if active read transactions are holding database locks. Wrapping inspection and DDL executions cleanly ensures locks release immediately.
 - **Table Absence on Fresh Databases**: Running inspection on a table before `Base.metadata.create_all()` causes inspection errors if the table does not exist. Calling `create_all()` first guarantees the base table exists before inspecting for missing columns.
 
+## Extension: Primary Key Changes (2026-11-06)
+
+`ALTER TABLE` cannot change a primary key in SQLite, so a column map is not enough when a key changes. The `sources` table moved from `PRIMARY KEY (source_identifier)` to `PRIMARY KEY (source_identifier, source_type)` so that one slug can exist on several ATS types. `_ensure_sources_primary_key(engine)` runs after `_ensure_table_columns()` and:
+
+1. Compares `inspect(engine).get_pk_constraint("sources")` with the model's primary key. If they match, it returns (idempotent).
+2. Inside one `engine.begin()` transaction: drops any leftover `sources_rebuild` table from an interrupted attempt, creates `sources_rebuild` from `Table.to_metadata(MetaData(), name=...)` so the DDL matches the model, copies every row with `INSERT ... SELECT`, drops `sources`, and renames `sources_rebuild` to `sources`.
+
+The copy cannot conflict, because rows that are unique on the old key are also unique on any wider key that contains it. Narrowing a key is different: it needs an explicit de-duplication rule first. Get the table from `Base.metadata.tables[...]` and not from `Model.__table__`, which mypy types as `FromClause`. Tests: `test_create_schema_rebuilds_legacy_sources_primary_key`.
+
 ## Reusable Insight
 
 Never rely on ORM `create_all()` helpers to perform schema migrations on pre-existing tables. For lightweight SQLite-backed services without heavyweight migration tools, pair `create_all()` with an idempotent schema inspection and targeted `ALTER TABLE ADD COLUMN` helper executed within an explicit transaction.

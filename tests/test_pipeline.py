@@ -324,7 +324,7 @@ class TestScanPipeline:
 
         def health(identifier):
             with get_session() as session:
-                return SourceRepository(session).get_by_identifier(identifier)
+                return SourceRepository(session).get("greenhouse", identifier)
 
         with patch("app.pipeline.runner.get_adapter") as mock_get_adapter:
             ok_adapter = Mock()

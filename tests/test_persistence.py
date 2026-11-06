@@ -136,6 +136,54 @@ class TestDatabaseInitialization:
         assert [tuple(r) for r in row] == [("k1", None)]
         engine.dispose()
 
+    def test_create_schema_rebuilds_legacy_sources_primary_key(self, tmp_path):
+        """A sources table keyed on source_identifier alone is rebuilt with a
+        (source_type, source_identifier) key, keeping every row."""
+        from sqlalchemy import create_engine, inspect
+
+        from app.persistence.schema import create_schema
+
+        engine = create_engine(f"sqlite:///{tmp_path / 'legacy_sources.db'}")
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE sources (source_identifier VARCHAR(255) NOT NULL, "
+                    "name VARCHAR(255) NOT NULL, source_type VARCHAR(50) NOT NULL, "
+                    "last_success_at VARCHAR(50), last_error_at VARCHAR(50), "
+                    "error_message TEXT, PRIMARY KEY (source_identifier))"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO sources VALUES "
+                    "('acme','Acme','greenhouse','2025-01-01T00:00:00.000000Z',NULL,NULL), "
+                    "('beta','Beta','ashby',NULL,'2025-01-02T00:00:00.000000Z','boom')"
+                )
+            )
+
+        create_schema(engine)
+        create_schema(engine)  # idempotent
+
+        inspector = inspect(engine)
+        pk = inspector.get_pk_constraint("sources")["constrained_columns"]
+        assert sorted(pk) == ["source_identifier", "source_type"]
+        assert "sources_rebuild" not in inspector.get_table_names()
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT * FROM sources ORDER BY source_identifier")
+            ).fetchall()
+            conn.execute(
+                text(
+                    "INSERT INTO sources (source_identifier, name, source_type) "
+                    "VALUES ('acme', 'Acme', 'ashby')"
+                )
+            )
+        assert [tuple(r) for r in rows] == [
+            ("acme", "Acme", "greenhouse", "2025-01-01T00:00:00.000000Z", None, None),
+            ("beta", "Beta", "ashby", None, "2025-01-02T00:00:00.000000Z", "boom"),
+        ]
+        engine.dispose()
+
 
 class TestSessionManagement:
     """Tests for session management."""
@@ -576,8 +624,8 @@ class TestSourceRepository:
         yield
         close_database()
 
-    def test_get_by_identifier_returns_source_when_exists(self):
-        """Test get_by_identifier returns source when exists."""
+    def test_get_returns_source_when_exists(self):
+        """Test get returns source when exists."""
         source = create_test_source()
 
         with get_session() as session:
@@ -586,7 +634,7 @@ class TestSourceRepository:
 
         with get_session() as session:
             repo = SourceRepository(session)
-            found_source = repo.get_by_identifier(source.source_identifier)
+            found_source = repo.get(source.source_type, source.source_identifier)
 
         assert found_source is not None
         assert found_source.source_identifier == source.source_identifier
@@ -650,15 +698,15 @@ class TestSourceRepository:
         with get_session() as session:
             repo = SourceRepository(session)
             repo.record_fetch(
+                source.source_type,
                 source.source_identifier,
                 name=source.name,
-                source_type=source.source_type,
                 at=timestamp,
             )
 
         with get_session() as session:
             repo = SourceRepository(session)
-            found_source = repo.get_by_identifier(source.source_identifier)
+            found_source = repo.get(source.source_type, source.source_identifier)
 
         assert found_source.last_success_at == timestamp
         assert found_source.last_error_at is None
@@ -679,16 +727,16 @@ class TestSourceRepository:
         with get_session() as session:
             repo = SourceRepository(session)
             repo.record_fetch(
+                source.source_type,
                 source.source_identifier,
                 name=source.name,
-                source_type=source.source_type,
                 at=error_time,
                 error="Test error",
             )
 
         with get_session() as session:
             repo = SourceRepository(session)
-            found_source = repo.get_by_identifier(source.source_identifier)
+            found_source = repo.get(source.source_type, source.source_identifier)
 
         assert found_source.last_success_at == success_time
         assert found_source.last_error_at == error_time
@@ -700,7 +748,7 @@ class TestSourceRepository:
 
         with get_session() as session:
             created = SourceRepository(session).record_fetch(
-                "newcorp", name="New Corp", source_type="ashby", at=at, error="boom"
+                "ashby", "newcorp", name="New Corp", at=at, error="boom"
             )
 
         assert created.name == "New Corp"
@@ -708,6 +756,29 @@ class TestSourceRepository:
         assert created.last_success_at is None
         assert created.last_error_at == at
         assert created.error_message == "boom"
+
+    def test_same_identifier_on_different_ats_types_keeps_separate_health(self):
+        """Health rows are keyed by (source_type, source_identifier), not slug alone."""
+        ok_at = datetime(2025, 11, 3, 9, 0, 0, tzinfo=timezone.utc)
+        err_at = datetime(2025, 11, 3, 9, 5, 0, tzinfo=timezone.utc)
+
+        with get_session() as session:
+            repo = SourceRepository(session)
+            repo.record_fetch("greenhouse", "acme", name="Acme (Greenhouse)", at=ok_at)
+            repo.record_fetch("ashby", "acme", name="Acme (Ashby)", at=err_at, error="boom")
+
+        with get_session() as session:
+            repo = SourceRepository(session)
+            greenhouse = repo.get("greenhouse", "acme")
+            ashby = repo.get("ashby", "acme")
+            assert len(repo.get_all()) == 2
+
+        assert greenhouse.name == "Acme (Greenhouse)"
+        assert greenhouse.last_success_at == ok_at
+        assert greenhouse.error_message is None
+        assert ashby.name == "Acme (Ashby)"
+        assert ashby.last_success_at is None
+        assert ashby.error_message == "boom"
 
 
 class TestAlertRepository:

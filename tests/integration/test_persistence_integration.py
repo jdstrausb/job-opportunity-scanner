@@ -258,12 +258,12 @@ class TestSourceHealthTracking:
 
         with get_session() as session:
             repo = SourceRepository(session)
-            repo.record_fetch(source_id, name=source_name, source_type="lever", at=success_time)
+            repo.record_fetch("lever", source_id, name=source_name, at=success_time)
 
         # Verify success recorded
         with get_session() as session:
             repo = SourceRepository(session)
-            source = repo.get_by_identifier(source_id)
+            source = repo.get("lever", source_id)
 
         assert source.last_success_at is not None
         assert source.last_error_at is None
@@ -276,13 +276,13 @@ class TestSourceHealthTracking:
         with get_session() as session:
             repo = SourceRepository(session)
             repo.record_fetch(
-                source_id, name=source_name, source_type="lever", at=error_time, error=error_msg
+                "lever", source_id, name=source_name, at=error_time, error=error_msg
             )
 
         # Verify error recorded and success preserved
         with get_session() as session:
             repo = SourceRepository(session)
-            source = repo.get_by_identifier(source_id)
+            source = repo.get("lever", source_id)
 
         assert source.last_success_at == success_time  # Preserved
         assert source.last_error_at is not None
@@ -293,12 +293,12 @@ class TestSourceHealthTracking:
 
         with get_session() as session:
             repo = SourceRepository(session)
-            repo.record_fetch(source_id, name=source_name, source_type="lever", at=success_time_2)
+            repo.record_fetch("lever", source_id, name=source_name, at=success_time_2)
 
         # Verify error cleared
         with get_session() as session:
             repo = SourceRepository(session)
-            source = repo.get_by_identifier(source_id)
+            source = repo.get("lever", source_id)
 
         assert source.last_success_at.hour == 12
         assert source.last_error_at is None
@@ -350,7 +350,7 @@ class TestMultiRepositoryWorkflow:
         # Update source with success
         with get_session() as session:
             source_repo = SourceRepository(session)
-            source_repo.record_fetch(source_id, name=source_id, source_type="ashby", at=now)
+            source_repo.record_fetch("ashby", source_id, name=source_id, at=now)
 
         # Verify everything persisted correctly
         with get_session() as session:
@@ -363,7 +363,7 @@ class TestMultiRepositoryWorkflow:
             assert len(stored_jobs) == 2
 
             # Check source status
-            stored_source = source_repo.get_by_identifier(source_id)
+            stored_source = source_repo.get("ashby", source_id)
             assert stored_source.last_success_at is not None
             assert stored_source.error_message is None
 
