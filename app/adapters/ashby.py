@@ -15,109 +15,57 @@ logger = logging.getLogger(__name__)
 class AshbyAdapter(BaseAdapter):
     """Adapter for Ashby ATS.
 
-    Ashby provides a GraphQL API for accessing job postings.
-    This adapter queries the GraphQL endpoint and transforms results to RawJob
+    Ashby provides a public API for accessing job postings from a company's job board.
+    This adapter queries the job board endpoint and transforms results to RawJob
     domain models.
 
     API Details:
-        Endpoint: https://jobs.ashby.com/api/graphql
-        Method: POST (GraphQL)
-        Authentication: None required for public job boards (some orgs may require API key)
-        Response: GraphQL response with data or errors field
+        Endpoint: https://api.ashbyhq.com/posting-api/job-board/{organization_name}
+        Method: GET
+        Authentication: None required for public job boards
     """
 
     ADAPTER_NAME = "ashby"
-    API_ENDPOINT = "https://jobs.ashby.com/api/graphql"
-
-    # GraphQL query for fetching job postings
-    GRAPHQL_QUERY = """
-    query JobBoard($organizationIdentifier: String!) {
-      jobBoard(organizationIdentifier: $organizationIdentifier) {
-        jobPostings {
-          id
-          title
-          location {
-            name
-          }
-          description
-          externalLink
-          publishedDate
-          updatedAt
-        }
-      }
-    }
-    """
+    API_ENDPOINT = "https://api.ashbyhq.com/posting-api/job-board/"
 
     def fetch_jobs(self, source_config: SourceConfig) -> list[RawJob]:
-        """Fetch jobs from Ashby GraphQL API.
+        """Fetch jobs from Ashby API.
 
-        Queries the Ashby GraphQL endpoint for job postings for the configured
+        Queries the Ashby job board endpoint for job postings for the configured
         organization and transforms them to RawJob domain models.
 
         Args:
-            source_config: Source configuration with identifier (organization ID)
+            source_config: Source configuration with identifier (organization name)
 
         Returns:
             List of RawJob objects, empty list on transient errors
 
         Raises:
-            AdapterError: On fatal errors (invalid config, response parsing, GraphQL errors)
+            AdapterError: On fatal errors (invalid config, response parsing)
         """
-        payload = {
-            "query": self.GRAPHQL_QUERY,
-            "variables": {
-                "organizationIdentifier": source_config.identifier,
-            },
-        }
+        url = f"{self.API_ENDPOINT}{source_config.identifier}"
 
         logger.info(
             "Fetching jobs from Ashby",
             extra={
                 "adapter": self.ADAPTER_NAME,
                 "source": source_config.identifier,
-                "url": self.API_ENDPOINT,
+                "url": url,
             },
         )
 
         try:
-            response = self._make_request(self.API_ENDPOINT, method="POST", json_data=payload)
+            response = self._make_request(url, method="GET")
 
-            # Check for GraphQL errors
-            if "errors" in response and response["errors"]:
-                errors = response["errors"]
-                error_messages = [
-                    err.get("message", "Unknown error") if isinstance(err, dict) else str(err)
-                    for err in errors
-                ]
-                raise AdapterResponseError(f"GraphQL errors: {', '.join(error_messages)}")
-
-            # Extract job board from response
-            data = response.get("data")
-            if not data:
-                logger.warning(
-                    "No data in GraphQL response",
-                    extra={
-                        "adapter": self.ADAPTER_NAME,
-                        "source": source_config.identifier,
-                    },
+            if not isinstance(response, dict):
+                raise AdapterResponseError(
+                    f"Expected a dict response, got {type(response).__name__}"
                 )
-                return []
 
-            job_board = data.get("jobBoard")
-            if not job_board:
-                logger.warning(
-                    "No job board found for organization",
-                    extra={
-                        "adapter": self.ADAPTER_NAME,
-                        "source": source_config.identifier,
-                    },
-                )
-                return []
-
-            jobs_data = job_board.get("jobPostings", [])
+            jobs_data = response.get("jobs", [])
             if not isinstance(jobs_data, list):
                 raise AdapterResponseError(
-                    f"Expected 'jobPostings' to be array, got {type(jobs_data).__name__}"
+                    f"Expected 'jobs' to be a list, got {type(jobs_data).__name__}"
                 )
 
             # Truncate to max_jobs if configured
@@ -189,14 +137,17 @@ class AshbyAdapter(BaseAdapter):
             id → external_id
             title → title
             source_config.name → company
-            location.name → location (may be None)
-            description → description (HTML cleaned)
-            externalLink → url
-            publishedDate → posted_at (ISO 8601 parsed to UTC)
+            location → location
+            descriptionHtml → description (HTML cleaned)
+            jobUrl → url
+            publishedAt → posted_at (ISO 8601 parsed to UTC)
             updatedAt → updated_at (ISO 8601 parsed to UTC)
+            secondaryLocations[].location → secondary_locations
+            isRemote → is_remote
+            address.postalAddress.addressCountry → location_country
 
         Args:
-            job: Job posting object from Ashby GraphQL response
+            job: Job posting object from Ashby API response
             source_config: Source configuration with company name
 
         Returns:
@@ -206,19 +157,36 @@ class AshbyAdapter(BaseAdapter):
             KeyError: If required field is missing
             ValueError: If field transformation fails
         """
-        # Extract location from nested structure
-        location = None
-        if "location" in job and job["location"] and isinstance(job["location"], dict):
-            location = job["location"].get("name")
+        # Extract secondary locations
+        secondary_locations = []
+        secondary_locs_data = job.get("secondaryLocations", [])
+        if isinstance(secondary_locs_data, list):
+            for sec_loc in secondary_locs_data:
+                if isinstance(sec_loc, dict) and "location" in sec_loc:
+                    loc_str = sec_loc["location"]
+                    if loc_str and isinstance(loc_str, str) and loc_str.strip():
+                        secondary_locations.append(loc_str.strip())
 
-        # Create RawJob with transformed fields
+        # Extract country from address if available
+        location_country = None
+        address = job.get("address")
+        if address and isinstance(address, dict):
+            postal_address = address.get("postalAddress")
+            if postal_address and isinstance(postal_address, dict):
+                country = postal_address.get("addressCountry")
+                if country and isinstance(country, str) and country.strip():
+                    location_country = country.strip()
+
         return RawJob(
             external_id=job["id"],
             title=job["title"],
             company=source_config.name,
-            location=location,
-            description=self._clean_html(job["description"]),  # Clean HTML
-            url=job["externalLink"],
-            posted_at=self._parse_timestamp(job.get("publishedDate")),
+            location=job.get("location"),
+            description=self._clean_html(job.get("descriptionHtml", "")),
+            url=job["jobUrl"],
+            posted_at=self._parse_timestamp(job.get("publishedAt")),
             updated_at=self._parse_timestamp(job.get("updatedAt")),
+            secondary_locations=secondary_locations,
+            is_remote=job.get("isRemote"),
+            location_country=location_country,
         )

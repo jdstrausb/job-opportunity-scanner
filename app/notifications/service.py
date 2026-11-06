@@ -18,6 +18,7 @@ from app.logging.context import log_context
 from app.matching.models import CandidateMatch
 from app.persistence.repositories import AlertRepository
 
+from .digest import DigestBuilder
 from .models import (
     NotificationResult,
     NotificationTemplateError,
@@ -334,3 +335,185 @@ class NotificationService:
         )
 
         return results
+
+    def send_digest(
+        self,
+        matches: List[CandidateMatch],
+        env_config: EnvironmentConfig,
+        email_config: EmailConfig,
+        alert_repo: AlertRepository,
+        scan_id: str,
+    ) -> NotificationResult:
+        """Send consolidated digest email with all matched jobs.
+
+        Groups jobs by company, sorts by date, and sends single email per source.
+
+        Args:
+            matches: All candidate matches from scan
+            env_config: Environment configuration
+            email_config: Email configuration
+            alert_repo: Alert repository for deduplication
+            scan_id: Unique scan run identifier
+
+        Returns:
+            NotificationResult for digest delivery
+        """
+        # Early exit if no matches
+        if not matches:
+            self.logger.info(
+                "No matches to notify, skipping digest",
+                extra={"event": "notification.digest.skipped", "reason": "no_matches"}
+            )
+            return NotificationResult(
+                job_key="digest",
+                version_hash="",
+                attempts=0,
+                status="skipped",
+            )
+
+        # Filter to only jobs that need notification (deduplication)
+        notify_candidates = []
+        for candidate in matches:
+            # Check should_notify and content_changed flags
+            if not candidate.should_notify or not candidate.content_changed:
+                continue
+
+            # Check deduplication
+            try:
+                if not alert_repo.has_been_sent(candidate.job.job_key, candidate.job.content_hash):
+                    notify_candidates.append(candidate)
+            except Exception as e:
+                # If deduplication check fails, be safe and include the job
+                self.logger.warning(
+                    f"Deduplication check failed for {candidate.job.job_key}: {e}",
+                    extra={"event": "notification.digest.dedup_error"},
+                    exc_info=True
+                )
+                notify_candidates.append(candidate)
+
+        # Check if all were filtered out
+        if not notify_candidates:
+            self.logger.info(
+                "All matches already notified, skipping digest",
+                extra={
+                    "event": "notification.digest.skipped",
+                    "reason": "all_duplicates",
+                    "total_matches": len(matches)
+                }
+            )
+            return NotificationResult(
+                job_key="digest",
+                version_hash="",
+                attempts=0,
+                status="skipped",
+            )
+
+        self.logger.info(
+            f"Building digest for {len(notify_candidates)} jobs from {len(matches)} total matches",
+            extra={
+                "event": "notification.digest.building",
+                "job_count": len(notify_candidates),
+                "total_matches": len(matches)
+            }
+        )
+
+        # Build digest context
+        digest_builder = DigestBuilder()
+        try:
+            context = digest_builder.build_digest_context(notify_candidates, scan_id)
+        except Exception as e:
+            error_msg = f"Failed to build digest context: {e}"
+            self.logger.error(error_msg, exc_info=True)
+            return NotificationResult(
+                job_key="digest",
+                version_hash="",
+                attempts=0,
+                status="failed",
+                error=error_msg,
+            )
+
+        # Render templates
+        try:
+            rendered = self.template_renderer.render_digest(context)
+            subject = rendered["subject"]
+            html_body = rendered["html_body"]
+            text_body = rendered["text_body"]
+        except NotificationTemplateError as e:
+            error_msg = f"Digest template rendering failed: {e}"
+            self.logger.error(
+                error_msg,
+                extra={"event": "notification.digest.template_error"},
+                exc_info=True
+            )
+            return NotificationResult(
+                job_key="digest",
+                version_hash="",
+                attempts=0,
+                status="failed",
+                error=error_msg,
+            )
+
+        # Build and send email
+        try:
+            recipients = parse_recipients(env_config.alert_to_email)
+            sender = build_sender_address(env_config)
+
+            message = EmailMessage()
+            message["Subject"] = subject
+            message["From"] = sender
+            message["To"] = ", ".join(recipients)
+            message.set_content(text_body)
+            message.add_alternative(html_body, subtype="html")
+
+            # Send email
+            self.smtp_client.send(message, env_config, email_config.use_tls)
+
+            self.logger.info(
+                f"Digest sent successfully: {len(notify_candidates)} jobs to {', '.join(recipients)}",
+                extra={
+                    "event": "notification.digest.sent",
+                    "job_count": len(notify_candidates),
+                    "company_count": context["total_companies"],
+                    "recipients": recipients,
+                }
+            )
+
+            # Record alerts for all jobs in digest (caller will commit)
+            now = datetime.now(timezone.utc)
+            for candidate in notify_candidates:
+                try:
+                    alert_repo.record_alert(
+                        candidate.job.job_key,
+                        candidate.job.content_hash,
+                        now
+                    )
+                except Exception as e:
+                    # Log but don't fail - email was sent
+                    self.logger.error(
+                        f"CRITICAL: Email sent but alert recording failed for {candidate.job.job_key}: {e}",
+                        extra={"event": "notification.digest.alert_recording_failed"},
+                        exc_info=True
+                    )
+
+            return NotificationResult(
+                job_key="digest",
+                version_hash="",
+                attempts=1,
+                status="sent",
+                should_persist_alert=True,
+            )
+
+        except Exception as e:
+            error_msg = f"Digest delivery failed: {e}"
+            self.logger.error(
+                error_msg,
+                extra={"event": "notification.digest.smtp_error"},
+                exc_info=True
+            )
+            return NotificationResult(
+                job_key="digest",
+                version_hash="",
+                attempts=1,
+                status="failed",
+                error=error_msg,
+            )

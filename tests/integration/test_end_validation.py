@@ -207,8 +207,8 @@ def test_full_pipeline_sample_fixture(
             assert "Senior Python Engineer (Remote)" in testcompanyb_titles
             assert "Lead Backend Engineer - Python" in testcompanyb_titles
 
-        # Verify SMTP was called correctly
-        assert mock_send.call_count == 5, "Should attempt to send 5 emails"
+        # Verify SMTP was called correctly (digest mode: 1 email per source)
+        assert mock_send.call_count == 2, "Should send 2 digest emails (one per source)"
 
         # Verify structured logging events
         log_records = [rec for rec in caplog.records]
@@ -261,12 +261,12 @@ def test_repeated_run_dedupes_alerts(
         # Enable logging
         caplog.set_level("INFO")
 
-        # First run - should send notifications
+        # First run - should send notifications (digest mode: 1 per source)
         result1 = pipeline.run_once()
         assert result1.total_notified == 5, "First run should send 5 notifications"
 
         first_run_email_count = mock_send.call_count
-        assert first_run_email_count == 5, "First run should call send 5 times"
+        assert first_run_email_count == 2, "First run should send 2 digest emails (one per source)"
 
         # Verify alerts in database after first run
         assert result1.alerts_sent == 5, "Should have 5 alerts after first run"

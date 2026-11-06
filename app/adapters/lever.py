@@ -150,6 +150,9 @@ class LeverAdapter(BaseAdapter):
             createdAt → posted_at (Unix milliseconds converted to UTC)
             updatedAt → updated_at (Unix milliseconds converted to UTC)
 
+        Note: Lever API doesn't provide structured secondary_locations or is_remote flags
+        in the standard public API. These fields are set to default values for future enhancement.
+
         Args:
             job: Posting object from Lever API response
             source_config: Source configuration with company name
@@ -174,6 +177,9 @@ class LeverAdapter(BaseAdapter):
         updated_at = self._parse_unix_timestamp_ms(job.get("updatedAt"))
 
         # Create RawJob with transformed fields
+        # TODO: Extract secondary_locations if Lever adds API support
+        # TODO: Extract is_remote from workplaceType field if available
+        # TODO: Extract location_country from structured location data if available
         return RawJob(
             external_id=job["id"],  # Already a string UUID
             title=job["text"],
@@ -183,6 +189,9 @@ class LeverAdapter(BaseAdapter):
             url=job["hostedUrl"],
             posted_at=posted_at,
             updated_at=updated_at,
+            secondary_locations=[],  # Not provided by Lever API
+            is_remote=None,  # Could potentially be extracted from workplaceType in future
+            location_country=None,  # Could be extracted from location string in future
         )
 
     def _get_description(self, job: dict) -> str:

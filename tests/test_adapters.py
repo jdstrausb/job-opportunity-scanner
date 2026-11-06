@@ -117,6 +117,35 @@ class TestBaseAdapter:
         with pytest.raises(TypeError, match="Can't instantiate abstract class"):
             BaseAdapter(timeout=30)
 
+    def test_send_request_redacts_api_key_in_error_logs(self, caplog):
+        """Connection errors echo the request URL; api_key must never reach logs or exceptions."""
+        secret = "super_secret_test_key_12345"
+        adapter = GreenhouseAdapter(timeout=30)
+        error = requests.exceptions.ConnectionError(
+            f"Failed to connect: https://serpapi.com/search.json?engine=google&api_key={secret}"
+        )
+
+        with caplog.at_level("DEBUG"):
+            with patch.object(requests.Session, "request", side_effect=error):
+                with pytest.raises(AdapterHTTPError) as exc_info:
+                    adapter._make_request(
+                        "https://serpapi.com/search.json",
+                        params={"engine": "google", "api_key": secret},
+                    )
+
+        assert secret not in caplog.text
+        assert "<REDACTED>" in caplog.text
+        assert secret not in str(exc_info.value)
+        assert secret not in (exc_info.value.url or "")
+
+    def test_sanitize_url_redacts_secret_params(self):
+        """_sanitize_url masks secret query params wherever they appear in text."""
+        sanitize = BaseAdapter._sanitize_url
+
+        assert sanitize("https://x.io/s?a=1&api_key=abc123&b=2") == "https://x.io/s?a=1&api_key=<REDACTED>&b=2"
+        assert sanitize("url: /s?api_key=abc\nnext line") == "url: /s?api_key=<REDACTED>\nnext line"
+        assert sanitize("no secrets here") == "no secrets here"
+
     def test_clean_html_strips_tags(self):
         """Test HTML cleaning removes tags."""
         adapter = GreenhouseAdapter(timeout=30)
