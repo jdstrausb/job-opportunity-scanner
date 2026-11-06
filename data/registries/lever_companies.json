@@ -1,0 +1,82 @@
+{
+  "version": "1.0",
+  "updated_at": "2025-11-11T00:00:00Z",
+  "description": "Curated list of companies using Lever ATS",
+  "companies": [
+    {
+      "identifier": "netflix",
+      "name": "Netflix",
+      "enabled": true
+    },
+    {
+      "identifier": "spotify",
+      "name": "Spotify",
+      "enabled": true
+    },
+    {
+      "identifier": "coursera",
+      "name": "Coursera",
+      "enabled": true
+    },
+    {
+      "identifier": "lyft",
+      "name": "Lyft",
+      "enabled": true
+    },
+    {
+      "identifier": "grubhub",
+      "name": "Grubhub",
+      "enabled": true
+    },
+    {
+      "identifier": "zappos",
+      "name": "Zappos",
+      "enabled": true
+    },
+    {
+      "identifier": "zillow",
+      "name": "Zillow",
+      "enabled": true
+    },
+    {
+      "identifier": "weride",
+      "name": "WeRide",
+      "enabled": true
+    },
+    {
+      "identifier": "box",
+      "name": "Box",
+      "enabled": true
+    },
+    {
+      "identifier": "paloaltonetworks",
+      "name": "Palo Alto Networks",
+      "enabled": true
+    },
+    {
+      "identifier": "mistral",
+      "name": "Mistral AI",
+      "enabled": true
+    },
+    {
+      "identifier": "eventbrite",
+      "name": "Eventbrite",
+      "enabled": true
+    },
+    {
+      "identifier": "textnow",
+      "name": "TextNow",
+      "enabled": true
+    },
+    {
+      "identifier": "instructure",
+      "name": "Instructure",
+      "enabled": true
+    },
+    {
+      "identifier": "quizlet",
+      "name": "Quizlet",
+      "enabled": true
+    }
+  ]
+}

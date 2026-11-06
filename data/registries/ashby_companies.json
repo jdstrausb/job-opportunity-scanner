@@ -1,0 +1,82 @@
+{
+  "version": "1.0",
+  "updated_at": "2025-11-13T00:00:00Z",
+  "description": "Curated list of companies using Ashby ATS",
+  "companies": [
+    {
+      "identifier": "anthropic",
+      "name": "Anthropic",
+      "enabled": true
+    },
+    {
+      "identifier": "linear",
+      "name": "Linear",
+      "enabled": true
+    },
+    {
+      "identifier": "retool",
+      "name": "Retool",
+      "enabled": true
+    },
+    {
+      "identifier": "valon",
+      "name": "Valon",
+      "enabled": true
+    },
+    {
+      "identifier": "notion",
+      "name": "Notion",
+      "enabled": true
+    },
+    {
+      "identifier": "openai",
+      "name": "OpenAI",
+      "enabled": true
+    },
+    {
+      "identifier": "scale",
+      "name": "Scale AI",
+      "enabled": true
+    },
+    {
+      "identifier": "vanta",
+      "name": "Vanta",
+      "enabled": true
+    },
+    {
+      "identifier": "deel",
+      "name": "Deel",
+      "enabled": true
+    },
+    {
+      "identifier": "perplexity",
+      "name": "Perplexity AI",
+      "enabled": true
+    },
+    {
+      "identifier": "replit",
+      "name": "Replit",
+      "enabled": true
+    },
+    {
+      "identifier": "netgear",
+      "name": "NETGEAR",
+      "enabled": true
+    },
+    {
+      "identifier": "cohere",
+      "name": "Cohere",
+      "enabled": true
+    },
+    {
+      "identifier": "pareto-ai",
+      "name": "Pareto AI",
+      "enabled": true
+    },
+    {
+      "identifier": "snowflake",
+      "name": "Snowflake",
+      "enabled": true
+    }
+  ]
+}

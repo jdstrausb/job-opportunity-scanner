@@ -1,0 +1,332 @@
+{
+  "version": "1.0",
+  "updated_at": "2025-11-11T00:00:00Z",
+  "description": "Curated list of companies using Greenhouse ATS",
+  "companies": [
+    {
+      "identifier": "airbnb",
+      "name": "Airbnb",
+      "enabled": true
+    },
+    {
+      "identifier": "atlassian",
+      "name": "Atlassian",
+      "enabled": true
+    },
+    {
+      "identifier": "cloudflare",
+      "name": "Cloudflare",
+      "enabled": true
+    },
+    {
+      "identifier": "databricks",
+      "name": "Databricks",
+      "enabled": true
+    },
+    {
+      "identifier": "docker",
+      "name": "Docker",
+      "enabled": true
+    },
+    {
+      "identifier": "dropbox",
+      "name": "Dropbox",
+      "enabled": true
+    },
+    {
+      "identifier": "github",
+      "name": "GitHub",
+      "enabled": true
+    },
+    {
+      "identifier": "gitlab",
+      "name": "GitLab",
+      "enabled": true
+    },
+    {
+      "identifier": "grammarly",
+      "name": "Grammarly",
+      "enabled": true
+    },
+    {
+      "identifier": "hashicorp",
+      "name": "HashiCorp",
+      "enabled": true
+    },
+    {
+      "identifier": "instacart",
+      "name": "Instacart",
+      "enabled": true
+    },
+    {
+      "identifier": "mongodb",
+      "name": "MongoDB",
+      "enabled": true
+    },
+    {
+      "identifier": "notion",
+      "name": "Notion",
+      "enabled": true
+    },
+    {
+      "identifier": "okta",
+      "name": "Okta",
+      "enabled": true
+    },
+    {
+      "identifier": "pinterest",
+      "name": "Pinterest",
+      "enabled": true
+    },
+    {
+      "identifier": "reddit",
+      "name": "Reddit",
+      "enabled": true
+    },
+    {
+      "identifier": "robinhood",
+      "name": "Robinhood",
+      "enabled": true
+    },
+    {
+      "identifier": "shopify",
+      "name": "Shopify",
+      "enabled": true
+    },
+    {
+      "identifier": "slack",
+      "name": "Slack",
+      "enabled": true
+    },
+    {
+      "identifier": "snap",
+      "name": "Snap Inc.",
+      "enabled": true
+    },
+    {
+      "identifier": "square",
+      "name": "Square",
+      "enabled": true
+    },
+    {
+      "identifier": "stripe",
+      "name": "Stripe",
+      "enabled": true
+    },
+    {
+      "identifier": "twilio",
+      "name": "Twilio",
+      "enabled": true
+    },
+    {
+      "identifier": "uber",
+      "name": "Uber",
+      "enabled": true
+    },
+    {
+      "identifier": "vercel",
+      "name": "Vercel",
+      "enabled": true
+    },
+    {
+      "identifier": "coinbase",
+      "name": "Coinbase",
+      "enabled": true
+    },
+    {
+      "identifier": "plaid",
+      "name": "Plaid",
+      "enabled": true
+    },
+    {
+      "identifier": "ramp",
+      "name": "Ramp",
+      "enabled": true
+    },
+    {
+      "identifier": "datadog",
+      "name": "Datadog",
+      "enabled": true
+    },
+    {
+      "identifier": "elastic",
+      "name": "Elastic",
+      "enabled": true
+    },
+    {
+      "identifier": "pagerduty",
+      "name": "PagerDuty",
+      "enabled": true
+    },
+    {
+      "identifier": "postman",
+      "name": "Postman",
+      "enabled": true
+    },
+    {
+      "identifier": "doordash",
+      "name": "DoorDash",
+      "enabled": true
+    },
+    {
+      "identifier": "etsy",
+      "name": "Etsy",
+      "enabled": true
+    },
+    {
+      "identifier": "faire",
+      "name": "Faire",
+      "enabled": true
+    },
+    {
+      "identifier": "airtable",
+      "name": "Airtable",
+      "enabled": true
+    },
+    {
+      "identifier": "asana",
+      "name": "Asana",
+      "enabled": true
+    },
+    {
+      "identifier": "figma",
+      "name": "Figma",
+      "enabled": true
+    },
+    {
+      "identifier": "miro",
+      "name": "Miro",
+      "enabled": true
+    },
+    {
+      "identifier": "zapier",
+      "name": "Zapier",
+      "enabled": true
+    },
+    {
+      "identifier": "1password",
+      "name": "1Password",
+      "enabled": true
+    },
+    {
+      "identifier": "auth0",
+      "name": "Auth0",
+      "enabled": true
+    },
+    {
+      "identifier": "discord",
+      "name": "Discord",
+      "enabled": true
+    },
+    {
+      "identifier": "roblox",
+      "name": "Roblox",
+      "enabled": true
+    },
+    {
+      "identifier": "canva",
+      "name": "Canva",
+      "enabled": true
+    },
+    {
+      "identifier": "duolingo",
+      "name": "Duolingo",
+      "enabled": true
+    },
+    {
+      "identifier": "gusto",
+      "name": "Gusto",
+      "enabled": true
+    },
+    {
+      "identifier": "webflow",
+      "name": "Webflow",
+      "enabled": true
+    },
+    {
+      "identifier": "netlify",
+      "name": "Netlify",
+      "enabled": true
+    },
+    {
+      "identifier": "talent_community",
+      "name": "Jump Trading",
+      "enabled": true
+    },
+    {
+      "identifier": "radixuniversity",
+      "name": "Radix Trading",
+      "enabled": true
+    },
+    {
+      "identifier": "hrttalentcommunity",
+      "name": "Hudson River Trading",
+      "enabled": true
+    },
+    {
+      "identifier": "deepmind",
+      "name": "DeepMind",
+      "enabled": true
+    },
+    {
+      "identifier": "hubspot",
+      "name": "HubSpot",
+      "enabled": true
+    },
+    {
+      "identifier": "wayfair",
+      "name": "Wayfair",
+      "enabled": true
+    },
+    {
+      "identifier": "meraki",
+      "name": "Cisco Meraki",
+      "enabled": true
+    },
+    {
+      "identifier": "unity3d",
+      "name": "Unity Technologies",
+      "enabled": true
+    },
+    {
+      "identifier": "docusign",
+      "name": "DocuSign",
+      "enabled": true
+    },
+    {
+      "identifier": "huggingface",
+      "name": "Hugging Face",
+      "enabled": true
+    },
+    {
+      "identifier": "ai2",
+      "name": "Allen Institute for AI",
+      "enabled": true
+    },
+    {
+      "identifier": "sonyinteractiveentertainmentglobal",
+      "name": "PlayStation",
+      "enabled": true
+    },
+    {
+      "identifier": "labelbox",
+      "name": "Labelbox",
+      "enabled": true
+    },
+    {
+      "identifier": "snorkelai",
+      "name": "Snorkel AI",
+      "enabled": true
+    },
+    {
+      "identifier": "teachablecareers",
+      "name": "Teachable",
+      "enabled": true
+    },
+    {
+      "identifier": "DBT Labs",
+      "name": "dbtlabsinc",
+      "enabled": true
+    }
+  ]
+}
