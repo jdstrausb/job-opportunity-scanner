@@ -274,7 +274,7 @@ class TestScanPipeline:
             mock_adapter = Mock()
 
             # First source succeeds, second fails
-            def side_effect(source_config, advanced_config):
+            def side_effect(source_config, advanced_config, env_config=None):
                 if source_config.identifier == "test1":
                     mock_adapter.fetch_jobs.return_value = sample_raw_jobs
                 else:
@@ -532,7 +532,7 @@ class TestScanPipeline:
     def _per_source_adapter(jobs_by_source):
         """Build a get_adapter side_effect returning distinct jobs per source."""
 
-        def side_effect(source_config, advanced_config):
+        def side_effect(source_config, advanced_config, env_config=None):
             adapter = Mock()
             adapter.fetch_jobs.return_value = jobs_by_source[source_config.identifier]
             return adapter

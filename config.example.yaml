@@ -30,6 +30,17 @@ sources:
   #   options:
   #     default_location: "Remote"
   #
+  # Google search discovery via SerpAPI (Optional): identifier is the search query.
+  # Requires SERPAPI_API_KEY. Hits on Greenhouse/Lever/Ashby job URLs are hydrated
+  # from the ATS JSON API; other hits fall back to the result title and snippet.
+  #
+  # - name: "Dork: Data Engineer Remote"
+  #   type: "serpapi_google"
+  #   identifier: 'site:boards.greenhouse.io OR site:jobs.lever.co OR site:jobs.ashbyhq.com "data engineer" remote'
+  #   enabled: true
+  #   options:
+  #     num_results: 20
+  #
   # Registry System (Optional): Use wildcard identifier "*" to scan all
   # enabled companies from the registry for that ATS type.
   # Registry files are located in data/registries/ directory.

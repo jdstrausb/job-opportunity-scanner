@@ -2,6 +2,9 @@
 
 import logging
 
+from typing import Optional
+
+from app.config.environment import EnvironmentConfig
 from app.config.models import AdvancedConfig, SourceConfig
 
 from .ashby import AshbyAdapter
@@ -10,11 +13,16 @@ from .exceptions import AdapterConfigurationError
 from .greenhouse import GreenhouseAdapter
 from .lever import LeverAdapter
 from .rss import RssAdapter
+from .serpapi_google import SerpApiSearchAdapter
 
 logger = logging.getLogger(__name__)
 
 
-def get_adapter(source_config: SourceConfig, advanced_config: AdvancedConfig) -> BaseAdapter:
+def get_adapter(
+    source_config: SourceConfig,
+    advanced_config: AdvancedConfig,
+    env_config: Optional[EnvironmentConfig] = None,
+) -> BaseAdapter:
     """Factory function to instantiate the appropriate ATS adapter.
 
     Creates an adapter instance for the specified ATS type with configuration
@@ -23,6 +31,7 @@ def get_adapter(source_config: SourceConfig, advanced_config: AdvancedConfig) ->
     Args:
         source_config: Source configuration with ATS type and identifier
         advanced_config: Advanced configuration with timeout and user-agent settings
+        env_config: Optional environment configuration (supplies the SerpAPI key)
 
     Returns:
         Instantiated adapter for the specified ATS type
@@ -42,6 +51,7 @@ def get_adapter(source_config: SourceConfig, advanced_config: AdvancedConfig) ->
         "lever": LeverAdapter,
         "ashby": AshbyAdapter,
         "rss": RssAdapter,
+        "serpapi_google": SerpApiSearchAdapter,
     }
 
     # Get the adapter class for the source type
@@ -64,6 +74,13 @@ def get_adapter(source_config: SourceConfig, advanced_config: AdvancedConfig) ->
     )
 
     try:
+        if adapter_class is SerpApiSearchAdapter:
+            return SerpApiSearchAdapter(
+                timeout=advanced_config.http_request_timeout,
+                user_agent=advanced_config.user_agent,
+                max_jobs=advanced_config.max_jobs_per_source,
+                api_key=env_config.serpapi_api_key if env_config else None,
+            )
         return adapter_class(
             timeout=advanced_config.http_request_timeout,
             user_agent=advanced_config.user_agent,

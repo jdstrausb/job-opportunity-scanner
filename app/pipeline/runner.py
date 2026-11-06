@@ -302,7 +302,7 @@ class ScanPipeline:
 
                     # Fetch jobs from adapter
                     try:
-                        adapter = get_adapter(source_config, self.app_config.advanced)
+                        adapter = get_adapter(source_config, self.app_config.advanced, self.env_config)
                         raw_jobs = adapter.fetch_jobs(source_config)
                         stats.fetched_count = len(raw_jobs)
 
