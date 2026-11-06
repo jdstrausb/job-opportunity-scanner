@@ -7,17 +7,17 @@ domain models rather than ORM models.
 
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional, cast
 
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import CursorResult, and_, delete, or_, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.domain.models import AlertRecord, DismissalScope, DismissedItem, Job, SourceStatus
+from app.utils.timestamps import utc_now
 
 from .exceptions import DataIntegrityError, PersistenceError, RecordNotFoundError
 from .schema import AlertRecordModel, DismissedItemModel, JobModel, SourceStatusModel
-from app.utils.timestamps import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -106,44 +106,11 @@ class JobRepository:
             PersistenceError: If database error occurs
         """
         try:
-            # Check if job exists
-            existing = self.session.get(JobModel, job.job_key)
-
-            if existing:
-                # Update existing job
-                existing.source_type = job.source_type
-                existing.source_identifier = job.source_identifier
-                existing.external_id = job.external_id
-                existing.title = job.title
-                existing.company = job.company
-                existing.location = job.location
-                existing.description = job.description
-                existing.url = job.url
-                existing.posted_at = (
-                    job.posted_at.strftime("%Y-%m-%dT%H:%M:%S.%fZ") if job.posted_at else None
-                )
-                existing.updated_at = (
-                    job.updated_at.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-                    if job.updated_at
-                    else None
-                )
-                existing.first_seen_at = job.first_seen_at.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-                existing.last_seen_at = job.last_seen_at.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-                existing.content_hash = job.content_hash
-                existing.secondary_locations = (
-                    job.secondary_locations if job.secondary_locations else None  # type: ignore[assignment]
-                )
-                existing.is_remote = job.is_remote  # type: ignore[assignment]
-                existing.location_country = job.location_country  # type: ignore[assignment]
-
-                self.session.flush()
-                return existing.to_domain()
-            else:
-                # Insert new job
-                job_model = JobModel.from_domain(job)
-                self.session.add(job_model)
-                self.session.flush()
-                return job_model.to_domain()
+            # merge() loads any existing row by primary key and copies every mapped
+            # column from the new instance, so inserts and updates share one path.
+            persisted = self.session.merge(JobModel.from_domain(job))
+            self.session.flush()
+            return persisted.to_domain()
 
         except IntegrityError as e:
             logger.error(f"Integrity error upserting job {job.job_key}: {e}", exc_info=True)
@@ -167,9 +134,9 @@ class JobRepository:
             stmt = (
                 update(JobModel)
                 .where(JobModel.job_key == job_key)
-                .values(last_seen_at=timestamp.strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
+                .values(last_seen_at=timestamp)
             )
-            result = self.session.execute(stmt)
+            result = cast(CursorResult[Any], self.session.execute(stmt))
             self.session.flush()
 
             if result.rowcount == 0:
@@ -221,10 +188,9 @@ class JobRepository:
             PersistenceError: If database error occurs
         """
         try:
-            cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
             stmt = (
                 select(JobModel)
-                .where(JobModel.last_seen_at < cutoff_str)
+                .where(JobModel.last_seen_at < cutoff)
                 .order_by(JobModel.last_seen_at.asc())
             )
             result = self.session.execute(stmt)
@@ -311,33 +277,9 @@ class SourceRepository:
             PersistenceError: If database error occurs
         """
         try:
-            # Check if source exists
-            existing = self.session.get(SourceStatusModel, source_status.source_identifier)
-
-            if existing:
-                # Update existing source
-                existing.name = source_status.name
-                existing.source_type = source_status.source_type
-                existing.last_success_at = (
-                    source_status.last_success_at.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-                    if source_status.last_success_at
-                    else None
-                )
-                existing.last_error_at = (
-                    source_status.last_error_at.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-                    if source_status.last_error_at
-                    else None
-                )
-                existing.error_message = source_status.error_message
-
-                self.session.flush()
-                return existing.to_domain()
-            else:
-                # Insert new source
-                source_model = SourceStatusModel.from_domain(source_status)
-                self.session.add(source_model)
-                self.session.flush()
-                return source_model.to_domain()
+            persisted = self.session.merge(SourceStatusModel.from_domain(source_status))
+            self.session.flush()
+            return persisted.to_domain()
 
         except IntegrityError as e:
             logger.error(
@@ -370,7 +312,7 @@ class SourceRepository:
 
             if existing:
                 # Update existing source
-                existing.last_success_at = timestamp.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                existing.last_success_at = timestamp
                 existing.last_error_at = None
                 existing.error_message = None
                 self.session.flush()
@@ -412,7 +354,7 @@ class SourceRepository:
 
             if existing:
                 # Update existing source
-                existing.last_error_at = timestamp.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                existing.last_error_at = timestamp
                 existing.error_message = error_message
                 self.session.flush()
             else:
@@ -565,9 +507,8 @@ class AlertRepository:
             PersistenceError: If database error occurs
         """
         try:
-            cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-            stmt = delete(AlertRecordModel).where(AlertRecordModel.sent_at < cutoff_str)
-            result = self.session.execute(stmt)
+            stmt = delete(AlertRecordModel).where(AlertRecordModel.sent_at < cutoff)
+            result = cast(CursorResult[Any], self.session.execute(stmt))
             self.session.flush()
 
             deleted_count = result.rowcount
@@ -625,7 +566,7 @@ class DismissedItemRepository:
             )
             if existing is not None:
                 existing.reason = item.reason
-                existing.dismissed_at = DismissedItemModel.from_domain(item).dismissed_at
+                existing.dismissed_at = item.dismissed_at
                 self.session.flush()
                 return existing.to_domain()
 
@@ -653,14 +594,17 @@ class DismissedItemRepository:
         key = item_key.strip().lower()
         scope_value = DismissalScope(scope).value
         try:
-            result = self.session.execute(
-                delete(DismissedItemModel).where(
-                    DismissedItemModel.item_key == key,
-                    DismissedItemModel.scope == scope_value,
-                )
+            result = cast(
+                CursorResult[Any],
+                self.session.execute(
+                    delete(DismissedItemModel).where(
+                        DismissedItemModel.item_key == key,
+                        DismissedItemModel.scope == scope_value,
+                    )
+                ),
             )
             self.session.flush()
-            return bool(result.rowcount)  # type: ignore[attr-defined]
+            return bool(result.rowcount)
         except SQLAlchemyError as e:
             logger.error(f"Error undismissing {scope_value} {key}: {e}", exc_info=True)
             raise PersistenceError(f"Failed to undismiss item: {e}") from e

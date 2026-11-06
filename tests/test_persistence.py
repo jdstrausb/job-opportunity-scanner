@@ -218,10 +218,10 @@ class TestORMModelConversions:
             location="Remote",
             description="Great opportunity",
             url="https://example.com/jobs/12345",
-            posted_at=now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-            updated_at=now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-            first_seen_at=now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-            last_seen_at=now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            posted_at=now,
+            updated_at=now,
+            first_seen_at=now,
+            last_seen_at=now,
             content_hash="abc123",
         )
 
@@ -306,6 +306,62 @@ class TestORMModelConversions:
         assert converted.job_key == alert.job_key
         assert converted.version_hash == alert.version_hash
         assert converted.sent_at.tzinfo == timezone.utc
+
+
+class TestTimestampStorageFormat:
+    """The on-disk timestamp format is part of the schema contract.
+
+    Existing databases hold ``YYYY-MM-DDTHH:MM:SS.ffffffZ`` strings and queries
+    compare them lexically, so writes must keep producing exactly that shape.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup_database(self):
+        init_database("sqlite:///:memory:")
+        yield
+        close_database()
+
+    def _raw(self, session, column: str, job_key: str) -> str:
+        return session.execute(
+            text(f"SELECT {column} FROM jobs WHERE job_key = :k"), {"k": job_key}
+        ).scalar_one()
+
+    def test_writes_fixed_width_utc_string(self):
+        from datetime import timedelta
+
+        job = create_test_job()
+        eastern = timezone(timedelta(hours=-5))
+        with get_session() as session:
+            repo = JobRepository(session)
+            repo.upsert(job)
+            repo.update_last_seen(job.job_key, datetime(2026, 11, 6, 12, 0, 0, tzinfo=eastern))
+            assert self._raw(session, "last_seen_at", job.job_key) == (
+                "2026-11-06T17:00:00.000000Z"
+            )
+
+    def test_reads_legacy_rows_without_microseconds(self):
+        job = create_test_job()
+        with get_session() as session:
+            JobRepository(session).upsert(job)
+            session.execute(
+                text("UPDATE jobs SET first_seen_at = '2025-01-01T00:00:00Z' WHERE job_key = :k"),
+                {"k": job.job_key},
+            )
+            session.expire_all()
+            loaded = JobRepository(session).get_by_key(job.job_key)
+
+        assert loaded is not None
+        assert loaded.first_seen_at == datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+    def test_rejects_non_datetime_values(self):
+        job = create_test_job()
+        with get_session() as session:
+            model = JobModel.from_domain(job)
+            model.last_seen_at = "2026-01-01T00:00:00Z"  # type: ignore[assignment]
+            session.add(model)
+            with pytest.raises(SQLAlchemyError):
+                session.flush()
+            session.rollback()
 
 
 class TestJobRepository:
