@@ -56,6 +56,13 @@ class SchedulerService:
         The first run will execute immediately after startup.
         Subsequent runs will follow the configured interval.
         """
+        if self.scheduler.running:
+            logger.warning(
+                "Scheduler already running; ignoring start()",
+                extra={"event": "scheduler.already_running"},
+            )
+            return
+
         # Create interval trigger
         trigger = IntervalTrigger(
             seconds=self.interval_seconds,

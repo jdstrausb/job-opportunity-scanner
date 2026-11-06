@@ -179,6 +179,7 @@ def _find_config_file(config_path: Optional[Path] = None) -> Path:
                 f"Specified configuration file not found: {config_path}",
                 suggestions=[
                     f"Ensure {config_path} exists",
+                    "Copy config.example.yaml to create one",
                     "Check the path and try again",
                 ],
             )

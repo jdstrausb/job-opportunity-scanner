@@ -71,9 +71,9 @@ class TestSchedulerService:
         )
 
         # Check job defaults
-        assert scheduler.scheduler.job_defaults["max_instances"] == 1
-        assert scheduler.scheduler.job_defaults["coalesce"] is True
-        assert scheduler.scheduler.job_defaults["misfire_grace_time"] == 60
+        assert scheduler.scheduler._job_defaults["max_instances"] == 1
+        assert scheduler.scheduler._job_defaults["coalesce"] is True
+        assert scheduler.scheduler._job_defaults["misfire_grace_time"] == 60
 
     def test_scheduler_immediate_first_run(self):
         """Test that first run is scheduled immediately."""

@@ -101,6 +101,8 @@ email:
             assert env_config.log_level == "DEBUG"
 
             # Env override takes precedence over config
+            # (load_runtime_config mutates the shared env config, so reset it)
+            mock_env_config.log_level = "INFO"
             _, env_config = load_runtime_config(config_file, None)
             assert env_config.log_level == "INFO"
 
@@ -120,9 +122,12 @@ email:
             mock_app_config = AppConfig(
                 sources=[SourceConfig(name="Test", type="greenhouse", identifier="test")],
                 search_criteria=SearchCriteria(required_terms=["python"]),
-                scan_interval="invalid",
+                scan_interval="15m",
                 email=EmailConfig(sender_email="test@example.com"),
             )
+            # AppConfig rejects bad intervals at construction; bypass validation
+            # to exercise load_runtime_config's own guard.
+            mock_app_config.scan_interval = "invalid"
             mock_env_config = EnvironmentConfig(
                 smtp_host="smtp.example.com",
                 smtp_port=587,

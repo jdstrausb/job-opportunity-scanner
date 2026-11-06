@@ -524,6 +524,7 @@ class ScanPipeline:
                                         stats.notified_count += 1
                                         stats.alerts_sent += 1
                                     elif result.error:
+                                        stats.had_errors = True
                                         stats.error_count += 1
 
                                 logger.info(
