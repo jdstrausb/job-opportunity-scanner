@@ -62,6 +62,8 @@ pytest tests/test_matching.py::test_required_terms_match
 pytest -k "test_greenhouse"
 ```
 
+Run Python tests through uv with the extras installed: `uv run --all-extras pytest --no-cov -q`. `--all-extras` is a `uv run` flag, not a `pytest` option.
+
 ### Code Quality
 ```bash
 # Lint with ruff
@@ -72,6 +74,18 @@ black --check .
 
 # Type checking with mypy
 mypy app
+```
+
+### Frontend (`frontend/`)
+```bash
+# Unit tests (Vitest)
+npm --prefix frontend test -- --run
+
+# Static SvelteKit build (writes frontend/build/index.html)
+npm --prefix frontend run build
+
+# Typecheck (svelte-kit sync + svelte-check)
+npm --prefix frontend run check
 ```
 
 ### Docker
@@ -351,6 +365,12 @@ Service validates required variables at startup and fails with `ConfigurationErr
 
 ### Adapters Returning Empty Results
 Enable debug logging (`--log-level DEBUG`) to see HTTP requests/responses. Verify company identifiers match ATS-specific requirements (e.g., Greenhouse slug vs. API token).
+
+### Uvicorn Fails to Start on websockets Auto-Detection
+`pyppeteer` 2.0.0 pins `websockets` 10.4, and Uvicorn's websocket auto-detection crashes on that version. Start Uvicorn with `ws="none"` (as `app/main.py` does) whenever the app has no websocket routes.
+
+### Config Save Fails in Docker
+`PUT /api/config` writes through `atomic_write_text()` (`app/utils/atomic_write.py`). Single-file bind mounts fall back to an in-place write, which is not atomic. See [docs/solutions/003-docker-bind-mount-atomic-write-fallback.md](docs/solutions/003-docker-bind-mount-atomic-write-fallback.md).
 
 ### Email Not Sending
 Most common issues: wrong SMTP credentials, TLS not enabled, firewall blocking port 587. Gmail requires app-specific passwords, not account passwords.
