@@ -9,6 +9,7 @@ from .base import BaseAdapter
 from .exceptions import AdapterConfigurationError
 from .greenhouse import GreenhouseAdapter
 from .lever import LeverAdapter
+from .rss import RssAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +37,11 @@ def get_adapter(source_config: SourceConfig, advanced_config: AdvancedConfig) ->
         >>> jobs = adapter.fetch_jobs(source)
     """
     # Map of ATS types to adapter classes
-    adapter_map = {
+    adapter_map: dict[str, type[BaseAdapter]] = {
         "greenhouse": GreenhouseAdapter,
         "lever": LeverAdapter,
         "ashby": AshbyAdapter,
+        "rss": RssAdapter,
     }
 
     # Get the adapter class for the source type

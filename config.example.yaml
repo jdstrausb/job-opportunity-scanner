@@ -20,6 +20,16 @@ sources:
     identifier: "enterprise-inc"
     enabled: false
 
+  # RSS / Atom feed source (Optional): identifier is the feed URL.
+  # options.default_location is used when feed items carry no location tag.
+  #
+  # - name: "Code4Lib Jobs"
+  #   type: "rss"
+  #   identifier: "https://jobs.code4lib.org/jobs.rss"
+  #   enabled: true
+  #   options:
+  #     default_location: "Remote"
+  #
   # Registry System (Optional): Use wildcard identifier "*" to scan all
   # enabled companies from the registry for that ATS type.
   # Registry files are located in data/registries/ directory.

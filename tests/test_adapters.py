@@ -17,6 +17,7 @@ from app.adapters import (
     AdapterTimeoutError,
     GreenhouseAdapter,
     LeverAdapter,
+    RssAdapter,
     get_adapter,
 )
 from app.adapters.base import BaseAdapter
@@ -95,16 +96,8 @@ def lever_response():
 
 @pytest.fixture
 def ashby_response():
-    """Load recorded Ashby GraphQL response."""
-    fixture_path = Path(__file__).parent / "fixtures" / "ats_responses" / "ashby_sample_response.json"
-    with open(fixture_path) as f:
-        return json.load(f)
-
-
-@pytest.fixture
-def ashby_error_response():
-    """Load Ashby GraphQL error response."""
-    fixture_path = Path(__file__).parent / "fixtures" / "ats_responses" / "ashby_graphql_error.json"
+    """Load recorded Ashby API response."""
+    fixture_path = Path(__file__).parent / "fixtures" / "ats_responses" / "ashby_api_sample_response.json"
     with open(fixture_path) as f:
         return json.load(f)
 
@@ -560,63 +553,31 @@ class TestAshbyAdapter:
         # Check HTML was cleaned
         assert "<p>" not in raw_jobs[0].description
 
-    def test_fetch_jobs_graphql_error(self, ashby_config, ashby_error_response):
-        """Test handling of GraphQL error response."""
+    def test_fetch_jobs_empty_response(self, ashby_config):
+        """Test handling of empty jobs list."""
         adapter = AshbyAdapter(timeout=30)
 
-        with patch.object(adapter, "_make_request", return_value=ashby_error_response):
-            with pytest.raises(AdapterResponseError, match="GraphQL errors"):
-                adapter.fetch_jobs(ashby_config)
-
-    def test_fetch_jobs_missing_data_field(self, ashby_config):
-        """Test handling when data field is missing."""
-        adapter = AshbyAdapter(timeout=30)
-
-        response = {"data": None}
+        response = {"apiVersion": "1", "jobs": []}
 
         with patch.object(adapter, "_make_request", return_value=response):
             raw_jobs = adapter.fetch_jobs(ashby_config)
 
         assert len(raw_jobs) == 0
 
-    def test_fetch_jobs_missing_job_board(self, ashby_config):
-        """Test handling when jobBoard is missing."""
-        adapter = AshbyAdapter(timeout=30)
-
-        response = {"data": {"jobBoard": None}}
-
-        with patch.object(adapter, "_make_request", return_value=response):
-            raw_jobs = adapter.fetch_jobs(ashby_config)
-
-        assert len(raw_jobs) == 0
-
-    def test_fetch_jobs_null_location(self, ashby_config):
+    def test_fetch_jobs_null_location(self, ashby_config, ashby_response):
         """Test that null location is handled gracefully."""
         adapter = AshbyAdapter(timeout=30)
 
-        response = {
-            "data": {
-                "jobBoard": {
-                    "jobPostings": [
-                        {
-                            "id": "test-id",
-                            "title": "Engineer",
-                            "location": None,
-                            "description": "<p>Description</p>",
-                            "externalLink": "https://example.com",
-                            "publishedDate": "2025-11-01T12:00:00.000Z",
-                            "updatedAt": "2025-11-04T10:30:00.000Z",
-                        }
-                    ]
-                }
-            }
-        }
+        # Modify the fixture to have a null location
+        response = ashby_response.copy()
+        response["jobs"][3]["location"] = None
 
         with patch.object(adapter, "_make_request", return_value=response):
             raw_jobs = adapter.fetch_jobs(ashby_config)
 
-        assert len(raw_jobs) == 1
-        assert raw_jobs[0].location is None
+        assert len(raw_jobs) == 5
+        # The job with null location is the 4th one in the fixture
+        assert raw_jobs[3].location is None
 
     def test_fetch_jobs_404_returns_empty_list(self, ashby_config):
         """Test that 404 error returns empty list."""
@@ -720,3 +681,115 @@ class TestAdapterExceptions:
         assert issubclass(AdapterTimeoutError, AdapterError)
         assert issubclass(AdapterResponseError, AdapterError)
         assert issubclass(AdapterConfigurationError, AdapterError)
+
+
+# ============================================================================
+# RSS Adapter Tests
+# ============================================================================
+
+RSS2_FEED = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Jobs</title>
+    <item>
+      <guid>job-1</guid>
+      <title>Data Engineer</title>
+      <description>&lt;p&gt;Build &amp;amp; ship pipelines&lt;/p&gt;</description>
+      <link>https://example.com/jobs/1</link>
+      <pubDate>Mon, 03 Nov 2025 10:30:00 -0500</pubDate>
+      <location>Austin, TX</location>
+    </item>
+    <item>
+      <title>No Guid Role</title>
+      <description>Fallback to link</description>
+      <link>https://example.com/jobs/2</link>
+    </item>
+  </channel>
+</rss>
+"""
+
+ATOM_FEED = """<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Jobs</title>
+  <entry>
+    <id>tag:example.com,2025:42</id>
+    <title>Backend Engineer</title>
+    <content type="html">&lt;p&gt;Write &lt;b&gt;Python&lt;/b&gt;&lt;/p&gt;</content>
+    <updated>2025-11-04T10:30:00Z</updated>
+    <link rel="self" href="https://example.com/feed/42"/>
+    <link rel="alternate" href="https://example.com/jobs/42"/>
+    <author><name>Acme Inc</name></author>
+  </entry>
+</feed>
+"""
+
+
+@pytest.fixture
+def rss_config():
+    """Create RSS source config."""
+    return SourceConfig(
+        name="Example Feed",
+        type="rss",
+        identifier="https://example.com/jobs.xml",
+        options={"default_location": "Remote"},
+    )
+
+
+class TestRssAdapter:
+    """Tests for RssAdapter."""
+
+    def test_fetch_jobs_parses_rss2_feed(self, rss_config):
+        adapter = RssAdapter(timeout=30)
+
+        with patch.object(adapter, "_make_text_request", return_value=RSS2_FEED):
+            jobs = adapter.fetch_jobs(rss_config)
+
+        assert len(jobs) == 2
+        assert jobs[0].external_id == "job-1"
+        assert jobs[0].title == "Data Engineer"
+        assert jobs[0].url == "https://example.com/jobs/1"
+        assert jobs[0].location == "Austin, TX"
+        assert jobs[0].company == "Example Feed"
+        assert "<p>" not in jobs[0].description
+        assert "Build & ship pipelines" in jobs[0].description
+        assert jobs[0].posted_at == datetime(2025, 11, 3, 15, 30, tzinfo=timezone.utc)
+        # Missing guid falls back to link
+        assert jobs[1].external_id == "https://example.com/jobs/2"
+        assert jobs[1].posted_at is None
+
+    def test_fetch_jobs_parses_atom_feed(self, rss_config):
+        adapter = RssAdapter(timeout=30)
+
+        with patch.object(adapter, "_make_text_request", return_value=ATOM_FEED):
+            jobs = adapter.fetch_jobs(rss_config)
+
+        assert len(jobs) == 1
+        job = jobs[0]
+        assert job.external_id == "tag:example.com,2025:42"
+        assert job.title == "Backend Engineer"
+        assert job.url == "https://example.com/jobs/42"
+        assert job.company == "Acme Inc"
+        assert "<b>" not in job.description
+        assert "Python" in job.description
+        assert job.updated_at == datetime(2025, 11, 4, 10, 30, tzinfo=timezone.utc)
+
+    def test_fetch_jobs_malformed_xml_raises_response_error(self, rss_config):
+        adapter = RssAdapter(timeout=30)
+
+        with patch.object(adapter, "_make_text_request", return_value="<rss><channel><item>"):
+            with pytest.raises(AdapterResponseError):
+                adapter.fetch_jobs(rss_config)
+
+    def test_fetch_jobs_uses_default_location_from_options(self, rss_config):
+        adapter = RssAdapter(timeout=30)
+
+        with patch.object(adapter, "_make_text_request", return_value=RSS2_FEED):
+            jobs = adapter.fetch_jobs(rss_config)
+
+        # Second item has no location tag
+        assert jobs[1].location == "Remote"
+
+    def test_get_adapter_returns_rss_adapter(self, rss_config, base_config):
+        adapter = get_adapter(rss_config, base_config)
+
+        assert isinstance(adapter, RssAdapter)

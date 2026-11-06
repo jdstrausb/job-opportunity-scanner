@@ -46,7 +46,7 @@ def verify_config_structure():
                         errors.append(f"Source {idx} missing key: {key}")
 
                 if 'type' in source:
-                    valid_types = ['greenhouse', 'lever', 'ashby']
+                    valid_types = ['greenhouse', 'lever', 'ashby', 'rss', 'serpapi_google']
                     if source['type'] not in valid_types:
                         errors.append(f"Source {idx} has invalid type: {source['type']}")
 

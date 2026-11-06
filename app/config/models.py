@@ -1,7 +1,7 @@
 """Configuration schema models using Pydantic."""
 
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -14,6 +14,8 @@ class ATSType(str, Enum):
     GREENHOUSE = "greenhouse"
     LEVER = "lever"
     ASHBY = "ashby"
+    RSS = "rss"
+    SERPAPI_GOOGLE = "serpapi_google"
 
 
 class LogLevel(str, Enum):
@@ -44,11 +46,14 @@ class SourceConfig(BaseModel):
     """Configuration for a single job source."""
 
     name: str = Field(..., min_length=1, description="Human-readable name for the source")
-    type: ATSType = Field(..., description="ATS type (greenhouse, lever, ashby)")
+    type: ATSType = Field(..., description="Source type (greenhouse, lever, ashby, rss, serpapi_google)")
     identifier: str = Field(
         ..., min_length=1, description="Company identifier used in API endpoint"
     )
     enabled: bool = Field(True, description="Whether to scan this source")
+    options: Dict[str, Any] = Field(
+        default_factory=dict, description="Adapter-specific options"
+    )
 
     @field_validator("name", "identifier")
     @classmethod

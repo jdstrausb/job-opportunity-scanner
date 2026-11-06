@@ -122,7 +122,7 @@ class Job(BaseModel):
     @classmethod
     def validate_source_type(cls, v: str) -> str:
         """Validate source type is one of the supported ATS types."""
-        valid_types = {"greenhouse", "lever", "ashby"}
+        valid_types = {"greenhouse", "lever", "ashby", "rss", "serpapi_google"}
         if v.lower() not in valid_types:
             raise ValueError(f"source_type must be one of {valid_types}, got: {v}")
         return v.lower()
@@ -213,7 +213,7 @@ class SourceStatus(BaseModel):
     @classmethod
     def validate_source_type(cls, v: str) -> str:
         """Validate source type is one of the supported ATS types."""
-        valid_types = {"greenhouse", "lever", "ashby"}
+        valid_types = {"greenhouse", "lever", "ashby", "rss", "serpapi_google"}
         if v.lower() not in valid_types:
             raise ValueError(f"source_type must be one of {valid_types}, got: {v}")
         return v.lower()

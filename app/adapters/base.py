@@ -9,7 +9,7 @@ import logging
 import re
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TypeVar
 
 import requests
 
@@ -26,6 +26,8 @@ from .exceptions import (
 )
 
 logger = get_logger(__name__, component="adapter")
+
+T = TypeVar("T")
 
 
 class BaseAdapter(ABC):
@@ -99,17 +101,10 @@ class BaseAdapter(ABC):
         url: str,
         method: str = "GET",
         headers: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, str]] = None,
+        params: Optional[Dict[str, Any]] = None,
         json_data: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Make HTTP request with error handling.
-
-        Handles:
-        - Setting user agent and timeout
-        - Connection errors and timeouts
-        - HTTP error status codes
-        - Invalid JSON responses
-        - Logging of request details
+        """Make HTTP request with error handling and parse the JSON response.
 
         Args:
             url: URL to request
@@ -126,8 +121,71 @@ class BaseAdapter(ABC):
             AdapterTimeoutError: On request timeout
             AdapterResponseError: On invalid JSON or other response parsing errors
         """
-        # Prepare headers
-        request_headers = self._session.headers.copy()
+        response = self._send_request(url, method, headers, params, json_data)
+
+        try:
+            data: Dict[str, Any] = response.json()
+        except (ValueError, requests.exceptions.JSONDecodeError) as e:
+            logger.error(
+                f"Failed to parse JSON response from {url}",
+                extra={
+                    "event": "adapter.fetch.error",
+                    "error_type": "JSONDecodeError",
+                    "url": url,
+                },
+            )
+            raise AdapterResponseError(
+                f"Failed to parse JSON response from {url}: {e}"
+            ) from e
+
+        logger.debug(
+            "HTTP request succeeded",
+            extra={
+                "event": "adapter.fetch.succeeded",
+                "status_code": response.status_code,
+                "url": url,
+            },
+        )
+        return data
+
+    def _make_text_request(
+        self,
+        url: str,
+        method: str = "GET",
+        headers: Optional[Dict[str, str]] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Make HTTP request and return the raw response body as text.
+
+        Shares session, timeout, and error handling with _make_request, for
+        non-JSON payloads such as RSS/Atom XML.
+
+        Raises:
+            AdapterHTTPError: On 4xx or 5xx HTTP status
+            AdapterTimeoutError: On request timeout
+        """
+        response = self._send_request(url, method, headers, params, None)
+        logger.debug(
+            "HTTP request succeeded",
+            extra={
+                "event": "adapter.fetch.succeeded",
+                "status_code": response.status_code,
+                "url": url,
+            },
+        )
+        text: str = response.text
+        return text
+
+    def _send_request(
+        self,
+        url: str,
+        method: str,
+        headers: Optional[Dict[str, str]],
+        params: Optional[Dict[str, Any]],
+        json_data: Optional[Dict[str, Any]],
+    ) -> requests.Response:
+        """Send an HTTP request, translating failures into adapter exceptions."""
+        request_headers: Dict[str, Any] = dict(self._session.headers)
         if headers:
             request_headers.update(headers)
 
@@ -151,9 +209,8 @@ class BaseAdapter(ABC):
                 timeout=self.timeout,
             )
 
-            # Check for HTTP errors
             if response.status_code >= 400:
-                # Determine if this is a retryable error (5xx) or fatal (4xx)
+                # 5xx is retryable on a later run, 4xx is fatal
                 is_retryable = response.status_code >= 500
                 event_name = "adapter.fetch.retryable_error" if is_retryable else "adapter.fetch.error"
                 log_level = logging.WARNING if is_retryable else logging.ERROR
@@ -166,7 +223,7 @@ class BaseAdapter(ABC):
                         "status_code": response.status_code,
                         "url": url,
                         "retry_after_seconds": None,
-                    }
+                    },
                 )
 
                 raise AdapterHTTPError(
@@ -175,30 +232,7 @@ class BaseAdapter(ABC):
                     url=url,
                 )
 
-            # Parse JSON response
-            try:
-                data = response.json()
-                logger.debug(
-                    "HTTP request succeeded",
-                    extra={
-                        "event": "adapter.fetch.succeeded",
-                        "status_code": response.status_code,
-                        "url": url,
-                    }
-                )
-                return data
-            except (ValueError, requests.exceptions.JSONDecodeError) as e:
-                logger.error(
-                    f"Failed to parse JSON response from {url}",
-                    extra={
-                        "event": "adapter.fetch.error",
-                        "error_type": "JSONDecodeError",
-                        "url": url,
-                    }
-                )
-                raise AdapterResponseError(
-                    f"Failed to parse JSON response from {url}: {e}"
-                ) from e
+            return response
 
         except requests.exceptions.Timeout as e:
             logger.warning(
@@ -208,7 +242,7 @@ class BaseAdapter(ABC):
                     "error_type": "Timeout",
                     "url": url,
                     "timeout": self.timeout,
-                }
+                },
             )
             raise AdapterTimeoutError(
                 f"Request to {url} timed out after {self.timeout} seconds",
@@ -221,7 +255,7 @@ class BaseAdapter(ABC):
                     "event": "adapter.fetch.error",
                     "error_type": type(e).__name__,
                     "url": url,
-                }
+                },
             )
             raise AdapterHTTPError(
                 f"Request to {url} failed: {e}",
@@ -318,11 +352,11 @@ class BaseAdapter(ABC):
             )
             return None
 
-    def _truncate_jobs(self, jobs: list[RawJob], adapter_name: str, source_identifier: str) -> list[RawJob]:
+    def _truncate_jobs(self, jobs: list[T], adapter_name: str, source_identifier: str) -> list[T]:
         """Truncate job list to max_jobs limit if configured.
 
         Args:
-            jobs: List of RawJob objects
+            jobs: List of raw job items (any element type)
             adapter_name: Name of the adapter (for logging)
             source_identifier: Company identifier (for logging)
 
