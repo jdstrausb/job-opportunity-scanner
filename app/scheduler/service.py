@@ -93,6 +93,25 @@ class SchedulerService:
             },
         )
 
+    def reschedule(self, interval_seconds: int) -> None:
+        """
+        Change the scan interval, taking effect immediately if already running.
+
+        Args:
+            interval_seconds: New interval between runs in seconds
+        """
+        self.interval_seconds = interval_seconds
+        if self.scheduler.running:
+            self.scheduler.reschedule_job(
+                "job-scan",
+                trigger=IntervalTrigger(seconds=interval_seconds, timezone=timezone.utc),
+            )
+        logger.info(
+            "Scheduler interval set to %d seconds",
+            interval_seconds,
+            extra={"event": "scheduler.rescheduled", "interval_seconds": interval_seconds},
+        )
+
     def shutdown(self, wait: bool = False) -> None:
         """
         Shutdown the scheduler gracefully.

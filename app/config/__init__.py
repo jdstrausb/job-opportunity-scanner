@@ -3,6 +3,7 @@
 from .environment import EnvironmentConfig, load_environment_config
 from .exceptions import ConfigurationError
 from .loader import load_config, validate_config_file
+from .manager import ConfigManager, ConfigReloadResult, ConfigUpdatePayload
 from .models import (
     ATSType,
     AdvancedConfig,
@@ -21,6 +22,10 @@ __all__ = [
     "load_config",
     "validate_config_file",
     "load_environment_config",
+    # Round-trip editing and hot-reload
+    "ConfigManager",
+    "ConfigUpdatePayload",
+    "ConfigReloadResult",
     # Configuration models
     "AppConfig",
     "SourceConfig",

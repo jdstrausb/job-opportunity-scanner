@@ -13,10 +13,14 @@ import time
 from pathlib import Path
 from typing import Optional, Tuple
 
+import uvicorn  # noqa: E402
+
+from app.api import create_app  # noqa: E402
 from app.config.duration import parse_duration, validate_duration_range
 from app.config.environment import EnvironmentConfig
 from app.config.exceptions import ConfigurationError
 from app.config.loader import load_config
+from app.config.manager import ConfigManager  # noqa: E402
 from app.config.models import AppConfig
 from app.logging import get_logger
 from app.logging.config import configure_logging
@@ -25,11 +29,15 @@ from app.matching.engine import KeywordMatcher
 from app.notifications.service import NotificationService
 from app.domain.models import DismissalScope
 from app.persistence.database import close_database, get_session, init_database
-from app.persistence.repositories import DismissedItemRepository
+from app.persistence.repositories import DismissedItemRepository, reevaluate_stored_jobs
 from app.pipeline import ScanPipeline
 from app.scheduler import SchedulerService
 
 logger = get_logger(__name__, component="cli")
+
+DEFAULT_UI_HOST = "127.0.0.1"
+DEFAULT_UI_PORT = 8000
+SPA_BUILD_DIR = Path("frontend/build")
 
 
 def load_runtime_config(
@@ -192,6 +200,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Job Opportunity Scanner - Automated job posting monitoring and notification service"
     )
+    try:
+        ui_port_default = int(os.getenv("UI_PORT") or DEFAULT_UI_PORT)
+    except ValueError:
+        parser.error(f"UI_PORT must be an integer, got {os.getenv('UI_PORT')!r}")
     parser.add_argument(
         "--config",
         type=Path,
@@ -202,6 +214,22 @@ def main() -> int:
         "--manual-run",
         action="store_true",
         help="Run a single scan immediately and exit (useful for testing)",
+    )
+    parser.add_argument(
+        "--host",
+        default=os.getenv("UI_HOST") or DEFAULT_UI_HOST,
+        help="Web UI bind address (default: UI_HOST or 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=ui_port_default,
+        help="Web UI port (default: UI_PORT or 8000)",
+    )
+    parser.add_argument(
+        "--no-ui",
+        action="store_true",
+        help="Run the daemon in headless mode without the web UI",
     )
     parser.add_argument(
         "--log-level",
@@ -258,6 +286,7 @@ def main() -> int:
                 "config_path": str(args.config),
                 "log_level": env_config.log_level,
                 "manual_run": args.manual_run,
+                "ui_enabled": not (args.manual_run or args.no_ui),
             },
         )
 
@@ -287,6 +316,26 @@ def main() -> int:
                 "event": "services.initialized",
             },
         )
+
+        # Step 4b: Score legacy rows stored before Match Explainability existed.
+        # A backfill failure must not keep the scanner from starting.
+        try:
+            with get_session() as session:
+                unscored_count = reevaluate_stored_jobs(
+                    session, keyword_matcher, only_unscored=True
+                )
+            if unscored_count > 0:
+                logger.info(
+                    "Re-evaluated %d legacy stored jobs",
+                    unscored_count,
+                    extra={"event": "startup.reevaluation.completed", "count": unscored_count},
+                )
+        except Exception as e:
+            logger.exception(
+                "Startup re-evaluation failed: %s",
+                e,
+                extra={"event": "startup.reevaluation.failed", "error": str(e)},
+            )
 
         # Step 5: Build pipeline
         pipeline = ScanPipeline(
@@ -352,7 +401,46 @@ def main() -> int:
                 shutdown_event=shutdown_event,
             )
 
-            # Set up signal handlers for graceful shutdown
+            if not args.no_ui:
+                # Default daemon: Uvicorn serves the API and SPA, and the app's
+                # lifespan starts/stops the scheduler so scans share the pipeline lock.
+                config_manager = ConfigManager(
+                    args.config, pipeline=pipeline, scheduler_service=scheduler_service
+                )
+                fastapi_app = create_app(
+                    pipeline=pipeline,
+                    scheduler_service=scheduler_service,
+                    config_manager=config_manager,
+                    static_dir=SPA_BUILD_DIR,
+                    manage_scheduler_lifespan=True,
+                )
+                logger.info(
+                    "Serving web UI on http://%s:%d",
+                    args.host,
+                    args.port,
+                    extra={"event": "service.ui.starting", "host": args.host, "port": args.port},
+                )
+                try:
+                    # Uvicorn installs its own SIGINT/SIGTERM handling and runs the
+                    # lifespan shutdown (scheduler.shutdown) before returning.
+                    # log_config=None keeps the application's logging setup intact.
+                    # ws="none": the UI uses no websockets, and uvicorn's auto-detection
+                    # crashes on the locked websockets 10.4 (pinned by pyppeteer).
+                    uvicorn.run(
+                        fastapi_app, host=args.host, port=args.port, log_config=None, ws="none"
+                    )
+                finally:
+                    close_database()
+                logger.info(
+                    "Job Opportunity Scanner stopped",
+                    extra={
+                        "event": "service.stopping",
+                        "uptime_seconds": round(time.time() - start_time, 2),
+                    },
+                )
+                return 0
+
+            # Headless daemon (--no-ui): set up signal handlers for graceful shutdown
             def signal_handler(signum, frame):
                 logger.info(
                     f"Received signal {signum}, shutting down",

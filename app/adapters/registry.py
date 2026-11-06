@@ -6,12 +6,17 @@ and expand wildcard source configurations into concrete source entries.
 
 import json
 import logging
+import os
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from app.config.models import ATSType, SourceConfig
+from app.utils.atomic_write import atomic_write_text
 
 logger = logging.getLogger(__name__)
+
+SUPPORTED_REGISTRY_TYPES = ("greenhouse", "lever", "ashby")
 
 
 class CompanyRegistry:
@@ -82,6 +87,111 @@ class CompanyRegistry:
                 self._registries[ats_type] = []
 
         self._loaded = True
+
+    def _registry_file(self, ats_type: str) -> Path:
+        if ats_type not in SUPPORTED_REGISTRY_TYPES:
+            raise ValueError(
+                f"Unsupported registry type '{ats_type}'; expected one of {SUPPORTED_REGISTRY_TYPES}"
+            )
+        return self.registry_dir / f"{ats_type}_companies.json"
+
+    def _read_document(self, ats_type: str) -> Dict[str, Any]:
+        """Read the registry document straight from disk (never from the cache)."""
+        registry_file = self._registry_file(ats_type)
+        if not registry_file.exists():
+            return {"version": "1.0", "updated_at": None, "companies": []}
+        with open(registry_file, "r") as f:
+            data = json.load(f)
+        data.setdefault("version", "1.0")
+        data.setdefault("updated_at", None)
+        data.setdefault("companies", [])
+        return dict(data)
+
+    def get_registry_metadata(self, ats_type: str) -> Dict[str, Any]:
+        """Return the ``version`` and ``updated_at`` stored in a registry file.
+
+        Args:
+            ats_type: greenhouse, lever or ashby
+
+        Returns:
+            Dict with ``version`` and ``updated_at`` (None if never written)
+
+        Raises:
+            ValueError: If the ATS type has no registry
+        """
+        document = self._read_document(ats_type)
+        return {"version": document["version"], "updated_at": document["updated_at"]}
+
+    def save_companies(self, ats_type: str, companies: List[Dict]) -> Dict[str, Any]:
+        """Replace a registry's company list, atomically.
+
+        Writes ``{ats}_companies.json`` through a ``.tmp`` file and ``os.replace()``
+        and stamps ``updated_at`` with the current UTC time. Nothing is written when
+        validation fails. Extra top-level keys already in the file are preserved.
+
+        Args:
+            ats_type: greenhouse, lever or ashby
+            companies: Entries with ``identifier`` and ``name`` (``enabled`` defaults True)
+
+        Returns:
+            The document that was written
+
+        Raises:
+            ValueError: On an unsupported ATS type, a blank identifier/name, or a
+                duplicate identifier (case-insensitive)
+        """
+        registry_file = self._registry_file(ats_type)
+        normalized: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for company in companies:
+            identifier = str(company.get("identifier", "")).strip()
+            name = str(company.get("name", "")).strip()
+            if not identifier or not name:
+                raise ValueError("Each company needs a non-empty identifier and name")
+            if identifier.lower() in seen:
+                raise ValueError(f"Duplicate identifier in {ats_type} registry: {identifier}")
+            seen.add(identifier.lower())
+            normalized.append(
+                {**company, "identifier": identifier, "name": name,
+                 "enabled": bool(company.get("enabled", True))}
+            )
+
+        document = self._read_document(ats_type)
+        document["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        document["companies"] = normalized
+
+        registry_file.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(registry_file, json.dumps(document, indent=2) + "\n")
+
+        self._registries[ats_type] = normalized
+        logger.info(
+            "Saved %d companies to %s registry",
+            len(normalized),
+            ats_type,
+            extra={"event": "registry.save.success", "ats_type": ats_type, "total": len(normalized)},
+        )
+        return document
+
+    def add_company(
+        self, ats_type: str, identifier: str, name: str, enabled: bool = True
+    ) -> Dict[str, Any]:
+        """Append one company to a registry, atomically.
+
+        Args:
+            ats_type: greenhouse, lever or ashby
+            identifier: ATS slug (unique per registry, case-insensitive)
+            name: Display name
+            enabled: Whether wildcard sources include it
+
+        Returns:
+            The document that was written
+
+        Raises:
+            ValueError: On invalid input or a duplicate identifier
+        """
+        companies = self._read_document(ats_type)["companies"]
+        companies.append({"identifier": identifier, "name": name, "enabled": enabled})
+        return self.save_companies(ats_type, companies)
 
     def get_companies(self, ats_type: str, enabled_only: bool = True) -> List[Dict]:
         """Get companies for a specific ATS type.

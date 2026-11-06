@@ -867,3 +867,212 @@ class TestSourceRunStats:
         assert stats.duration_seconds == 0.0
         assert not stats.had_errors
         assert stats.error_message is None
+
+
+class TestPipelineMatchExplainability:
+    """Match Explainability persistence, alert-safe scans and run-state exposure."""
+
+    @staticmethod
+    def _matcher():
+        from app.config.models import SearchProfile
+
+        return KeywordMatcher(
+            [
+                SearchProfile(
+                    name="py",
+                    required_terms=["python"],
+                    affinity_weights={"python": 2.0, "senior": 3.0},
+                )
+            ]
+        )
+
+    @staticmethod
+    def _raw_job(description="We need a senior Python developer"):
+        return RawJob(
+            external_id="job1",
+            title="Software Engineer",
+            company="Tech Corp",
+            location="Remote",
+            description=description,
+            url="https://example.com/jobs/1",
+            posted_at=None,
+        )
+
+    @staticmethod
+    def _make_pipeline(app_config, env_config, notification_service, matcher=None):
+        app_config.sources = [app_config.sources[0]]
+        app_config.email.notification_mode = NotificationMode.DIGEST
+        return ScanPipeline(
+            app_config=app_config,
+            env_config=env_config,
+            notification_service=notification_service,
+            keyword_matcher=matcher or TestPipelineMatchExplainability._matcher(),
+        )
+
+    @staticmethod
+    def _run(pipeline, raw_jobs, **kwargs):
+        with patch("app.pipeline.runner.get_adapter") as mock_get_adapter:
+            adapter = Mock()
+            adapter.fetch_jobs.return_value = raw_jobs
+            mock_get_adapter.return_value = adapter
+            return pipeline.run_once(**kwargs)
+
+    @staticmethod
+    def _stored(job_key=None):
+        from app.persistence.database import get_session
+        from app.persistence.repositories import JobRepository
+
+        with get_session() as session:
+            repo = JobRepository(session)
+            if job_key is None:
+                jobs = repo.get_by_source("greenhouse", "test1")
+                assert len(jobs) == 1
+                return jobs[0]
+            return repo.get_by_key(job_key)
+
+    def test_run_once_persists_match_explainability_on_jobs_table(
+        self, temp_database, app_config, env_config, mock_notification_service
+    ):
+        pipeline = self._make_pipeline(app_config, env_config, mock_notification_service)
+
+        self._run(pipeline, [self._raw_job()])
+
+        job = self._stored()
+        assert job.is_match is True
+        assert job.primary_profile == "py"
+        assert job.matched_profiles == ["py"]
+        assert job.affinity_score > 0
+        assert job.score_breakdown
+        assert job.match_snippets
+        assert job.matched_fields
+
+    def test_run_once_refreshes_match_metadata_on_unchanged_jobs(
+        self, temp_database, app_config, env_config, mock_notification_service
+    ):
+        from app.config.models import SearchProfile
+        from app.persistence.database import get_session
+        from app.persistence.repositories import JobRepository
+
+        pipeline = self._make_pipeline(app_config, env_config, mock_notification_service)
+        self._run(pipeline, [self._raw_job()])
+        first = self._stored()
+        with get_session() as session:
+            JobRepository(session).update_user_status(first.job_key, "saved")
+
+        # Profiles changed between scans; the job content did not
+        pipeline.keyword_matcher = KeywordMatcher(
+            [SearchProfile(name="renamed", required_terms=["python"], affinity_weights={"python": 9.0})]
+        )
+        original = JobRepository.update_last_seen_and_match
+        with patch.object(
+            JobRepository, "update_last_seen_and_match", autospec=True, side_effect=original
+        ) as spy:
+            result = self._run(pipeline, [self._raw_job()])
+
+        assert spy.call_count == 1
+        assert result.total_upserted == 0
+        second = self._stored()
+        assert second.content_hash == first.content_hash
+        assert second.primary_profile == "renamed"
+        assert second.affinity_score == 9.0
+        assert second.first_seen_at == first.first_seen_at
+        assert second.last_seen_at > first.last_seen_at
+        assert second.user_status.value == "saved"
+
+    def test_run_once_preserves_user_status_when_job_content_changes(
+        self, temp_database, app_config, env_config, mock_notification_service
+    ):
+        from app.domain.models import TriageStatus
+        from app.persistence.database import get_session
+        from app.persistence.repositories import JobRepository
+
+        pipeline = self._make_pipeline(app_config, env_config, mock_notification_service)
+        self._run(pipeline, [self._raw_job("A python developer")])
+        first = self._stored()
+        with get_session() as session:
+            JobRepository(session).update_user_status(first.job_key, "applied")
+
+        self._run(pipeline, [self._raw_job("A senior python developer")])
+
+        second = self._stored()
+        assert second.content_hash != first.content_hash
+        assert second.affinity_score > first.affinity_score
+        assert second.user_status == TriageStatus.APPLIED
+
+    def test_run_once_alert_safe_mode_skips_notifications_and_preserves_digest_retry(
+        self, temp_database, app_config, env_config, mock_notification_service
+    ):
+        from app.persistence.database import get_session
+        from app.persistence.repositories import AlertRepository
+
+        pipeline = self._make_pipeline(app_config, env_config, mock_notification_service)
+
+        def working_send_digest(candidates, env, email, alert_repo, scan_id):
+            for c in candidates:
+                alert_repo.record_alert(c.job.job_key, c.job.content_hash, utc_now())
+            return NotificationResult(
+                job_key="digest", version_hash="v", attempts=1, status="sent"
+            )
+
+        mock_notification_service.send_digest.side_effect = working_send_digest
+
+        # Alert-safe scan: persists and matches, never notifies
+        quiet = self._run(pipeline, [self._raw_job()], send_notifications=False)
+        job = self._stored()
+        assert quiet.total_matched > 0
+        assert quiet.total_notified == 0
+        assert quiet.alerts_sent == 0
+        mock_notification_service.send_digest.assert_not_called()
+        mock_notification_service.send_notifications.assert_not_called()
+        assert job.is_match is True
+        with get_session() as session:
+            assert AlertRepository(session).get_alerts_for_job(job.job_key) == []
+
+        # Scheduled scan: unchanged job is picked up as a Digest Retry
+        loud = self._run(pipeline, [self._raw_job()])
+        assert loud.total_notified == 1
+        assert loud.alerts_sent == 1
+        candidates = mock_notification_service.send_digest.call_args.args[0]
+        assert [c.is_retry for c in candidates] == [True]
+        assert [c.needs_alert for c in candidates] == [True]
+        with get_session() as session:
+            assert AlertRepository(session).has_been_sent(job.job_key, job.content_hash)
+
+    def test_alert_safe_mode_skips_legacy_notifications(
+        self, temp_database, app_config, env_config, mock_notification_service
+    ):
+        pipeline = self._make_pipeline(app_config, env_config, mock_notification_service)
+        app_config.email.notification_mode = NotificationMode.LEGACY
+
+        result = self._run(pipeline, [self._raw_job()], send_notifications=False)
+
+        assert result.total_matched > 0
+        assert result.total_notified == 0
+        mock_notification_service.send_notifications.assert_not_called()
+        mock_notification_service.send_digest.assert_not_called()
+
+    def test_pipeline_tracks_last_run_result_and_is_running_property(
+        self, temp_database, app_config, env_config, mock_notification_service
+    ):
+        pipeline = self._make_pipeline(app_config, env_config, mock_notification_service)
+        assert pipeline.last_run_result is None
+        assert pipeline.is_running is False
+
+        observed = []
+        with patch("app.pipeline.runner.get_adapter") as mock_get_adapter:
+            adapter = Mock()
+
+            def fetch(*args, **kwargs):
+                observed.append(pipeline.is_running)
+                # A concurrent trigger is skipped and must not replace last_run_result
+                observed.append(pipeline.run_once().skipped)
+                return [self._raw_job()]
+
+            adapter.fetch_jobs.side_effect = fetch
+            mock_get_adapter.return_value = adapter
+            result = pipeline.run_once()
+
+        assert observed == [True, True]
+        assert pipeline.is_running is False
+        assert pipeline.last_run_result is result
+        assert result.skipped is False

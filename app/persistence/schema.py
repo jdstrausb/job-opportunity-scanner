@@ -14,12 +14,19 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, Dialect, Index, MetaData, String, Text, inspect, text
+from sqlalchemy import JSON, Boolean, Dialect, Float, Index, MetaData, String, Text, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
 
-from app.domain.models import AlertRecord, DismissalScope, DismissedItem, Job, SourceStatus
+from app.domain.models import (
+    AlertRecord,
+    DismissalScope,
+    DismissedItem,
+    Job,
+    SourceStatus,
+    TriageStatus,
+)
 from app.utils.timestamps import ensure_utc
 
 logger = logging.getLogger(__name__)
@@ -100,11 +107,27 @@ class JobModel(Base):
     is_remote: Mapped[bool | None] = mapped_column(Boolean)
     location_country: Mapped[str | None] = mapped_column(String(255))
 
+    # Match explainability (NULL is_match = legacy row not yet scored)
+    is_match: Mapped[bool | None] = mapped_column(Boolean)
+    primary_profile: Mapped[str | None] = mapped_column(String(255))
+    matched_profiles: Mapped[list[str] | None] = mapped_column(JSON)
+    affinity_score: Mapped[float | None] = mapped_column(Float, default=0.0, server_default="0.0")
+    score_breakdown: Mapped[dict[str, float] | None] = mapped_column(JSON)
+    match_snippets: Mapped[list[str] | None] = mapped_column(JSON)
+    matched_fields: Mapped[dict[str, list[str]] | None] = mapped_column(JSON)
+
+    # User triage workflow state: new | saved | applied
+    user_status: Mapped[str | None] = mapped_column(
+        String(50), default="new", server_default="new"
+    )
+
     # Indexes
     __table_args__ = (
         Index("idx_jobs_source", "source_type", "source_identifier"),
         Index("idx_jobs_last_seen", "last_seen_at"),
         Index("idx_jobs_content_hash", "content_hash"),
+        Index("idx_jobs_match_score", "is_match", "affinity_score"),
+        Index("idx_jobs_user_status", "user_status"),
     )
 
     def to_domain(self) -> Job:
@@ -127,6 +150,14 @@ class JobModel(Base):
             secondary_locations=self.secondary_locations or [],
             is_remote=self.is_remote,
             location_country=self.location_country,
+            is_match=self.is_match,
+            primary_profile=self.primary_profile,
+            matched_profiles=self.matched_profiles or [],
+            affinity_score=self.affinity_score or 0.0,
+            score_breakdown=self.score_breakdown or {},
+            match_snippets=self.match_snippets or [],
+            matched_fields=self.matched_fields or {},
+            user_status=TriageStatus(self.user_status or TriageStatus.NEW),
         )
 
     @classmethod
@@ -150,6 +181,14 @@ class JobModel(Base):
             secondary_locations=job.secondary_locations or None,
             is_remote=job.is_remote,
             location_country=job.location_country,
+            is_match=job.is_match,
+            primary_profile=job.primary_profile,
+            matched_profiles=job.matched_profiles,
+            affinity_score=job.affinity_score,
+            score_breakdown=job.score_breakdown,
+            match_snippets=job.match_snippets,
+            matched_fields=job.matched_fields,
+            user_status=job.user_status.value,
         )
 
 
@@ -275,7 +314,20 @@ _JOBS_MIGRATION_COLUMNS = {
     "secondary_locations": "JSON",
     "is_remote": "BOOLEAN",
     "location_country": "VARCHAR(255)",
+    "is_match": "BOOLEAN",
+    "primary_profile": "VARCHAR(255)",
+    "matched_profiles": "JSON",
+    "affinity_score": "FLOAT DEFAULT 0.0",
+    "score_breakdown": "JSON",
+    "match_snippets": "JSON",
+    "matched_fields": "JSON",
+    "user_status": "VARCHAR(50) DEFAULT 'new'",
 }
+
+_JOBS_MIGRATION_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_jobs_match_score ON jobs (is_match, affinity_score)",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_user_status ON jobs (user_status)",
+)
 
 
 def _ensure_table_columns(engine: Engine) -> None:
@@ -286,13 +338,14 @@ def _ensure_table_columns(engine: Engine) -> None:
     """
     existing = {col["name"] for col in inspect(engine).get_columns("jobs")}
     missing = {n: t for n, t in _JOBS_MIGRATION_COLUMNS.items() if n not in existing}
-    if not missing:
-        return
 
     with engine.begin() as conn:
         for name, sql_type in missing.items():
             logger.info("Adding missing column jobs.%s", name)
             conn.execute(text(f"ALTER TABLE jobs ADD COLUMN {name} {sql_type}"))
+        # Indexes reference the new columns, so they must follow the ALTERs.
+        for statement in _JOBS_MIGRATION_INDEXES:
+            conn.execute(text(statement))
 
 
 _SOURCES_REBUILD_TABLE = "sources_rebuild"

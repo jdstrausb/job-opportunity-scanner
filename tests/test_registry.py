@@ -412,3 +412,82 @@ class TestExpandSourcesWithRegistry:
         # Should work and return unchanged sources
         assert len(expanded) == 1
         assert expanded[0].identifier == "github"
+
+
+class TestCompanyRegistryWrites:
+    """Atomic JSON write helpers on CompanyRegistry."""
+
+    @staticmethod
+    def _registry(tmp_path):
+        registry_dir = tmp_path / "registries"
+        registry_dir.mkdir()
+        (registry_dir / "lever_companies.json").write_text(
+            json.dumps(
+                {
+                    "version": "1.0",
+                    "updated_at": "2025-11-11T00:00:00Z",
+                    "companies": [{"identifier": "Acme", "name": "Acme", "enabled": True}],
+                }
+            )
+        )
+        return CompanyRegistry(registry_dir), registry_dir / "lever_companies.json"
+
+    def test_registry_save_companies_and_add_company_atomic_write(self, tmp_path):
+        from datetime import datetime
+
+        registry, file = self._registry(tmp_path)
+        assert registry.get_registry_metadata("lever") == {
+            "version": "1.0",
+            "updated_at": "2025-11-11T00:00:00Z",
+        }
+
+        saved = registry.save_companies(
+            "lever",
+            [
+                {"identifier": "acme", "name": "Acme", "enabled": False},
+                {"identifier": "globex", "name": "Globex"},
+            ],
+        )
+        on_disk = json.loads(file.read_text())
+        assert on_disk == saved
+        assert on_disk["version"] == "1.0"
+        assert on_disk["updated_at"] != "2025-11-11T00:00:00Z"
+        datetime.fromisoformat(on_disk["updated_at"].replace("Z", "+00:00"))
+        assert [c["enabled"] for c in on_disk["companies"]] == [False, True]
+        assert [c["identifier"] for c in registry.get_companies("lever", enabled_only=False)] == [
+            "acme",
+            "globex",
+        ]
+
+        added = registry.add_company("lever", "initech", "Initech", enabled=False)
+        assert added["companies"][-1] == {"identifier": "initech", "name": "Initech", "enabled": False}
+        assert json.loads(file.read_text()) == added
+        assert not list(file.parent.glob("*.tmp"))
+
+    def test_add_and_save_reject_case_insensitive_duplicates_without_writing(self, tmp_path):
+        registry, file = self._registry(tmp_path)
+        before = file.read_bytes()
+
+        with pytest.raises(ValueError):
+            registry.add_company("lever", "ACME", "Dup")
+        with pytest.raises(ValueError):
+            registry.save_companies(
+                "lever",
+                [{"identifier": "x", "name": "X"}, {"identifier": "X", "name": "Y"}],
+            )
+
+        assert file.read_bytes() == before
+        assert not list(file.parent.glob("*.tmp"))
+
+    def test_add_company_creates_missing_registry_and_validates_input(self, tmp_path):
+        registry_dir = tmp_path / "fresh"
+        registry = CompanyRegistry(registry_dir)
+
+        created = registry.add_company("ashby", "new-co", "New Co")
+
+        assert created["companies"] == [{"identifier": "new-co", "name": "New Co", "enabled": True}]
+        assert (registry_dir / "ashby_companies.json").exists()
+        with pytest.raises(ValueError):
+            registry.add_company("workday", "x", "X")
+        with pytest.raises(ValueError):
+            registry.add_company("ashby", " ", "Blank")

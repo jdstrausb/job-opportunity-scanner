@@ -272,3 +272,21 @@ class TestSchedulerService:
 
         # Should have been called multiple times despite first failure
         assert call_count[0] >= 2
+
+
+class TestSchedulerReschedule:
+    def test_reschedule_updates_interval_and_running_job_trigger(self):
+        service = SchedulerService(pipeline_callable=lambda: None, interval_seconds=900)
+        service.reschedule(1800)  # not running: only records the interval
+        assert service.interval_seconds == 1800
+        assert service.get_next_run_time() is None
+
+        service.start()
+        try:
+            service.reschedule(3600)
+            job = service.scheduler.get_job("job-scan")
+            assert service.interval_seconds == 3600
+            assert job is not None
+            assert job.trigger.interval.total_seconds() == 3600
+        finally:
+            service.shutdown()

@@ -62,8 +62,14 @@ class ScanPipeline:
         self.keyword_matcher = keyword_matcher
         self.filtering_service = FilteringService()
         self._lock = threading.Lock()
+        self.last_run_result: Optional[PipelineRunResult] = None
 
-    def run_once(self) -> PipelineRunResult:
+    @property
+    def is_running(self) -> bool:
+        """Return True if a pipeline scan currently holds the execution lock."""
+        return self._lock.locked()
+
+    def run_once(self, *, send_notifications: bool = True) -> PipelineRunResult:
         """
         Execute a complete scan of all enabled sources.
 
@@ -75,6 +81,12 @@ class ScanPipeline:
         4. In digest mode, sends one consolidated digest after all sources
         5. Aggregates metrics across all sources
         6. Returns comprehensive results
+
+        Args:
+            send_notifications: When False (an Alert-Safe Scan Trigger), jobs are still
+                fetched, scored and persisted, but no notification is dispatched and
+                nothing is written to ``alerts_sent``. Unalerted matches are picked up
+                again by the next notifying run (Digest Retry).
 
         Returns:
             PipelineRunResult with aggregate metrics and per-source stats
@@ -140,7 +152,10 @@ class ScanPipeline:
                         continue
 
                     stats, digest_matches = self._process_source(
-                        source_config, run_started_at, run_id
+                        source_config,
+                        run_started_at,
+                        run_id,
+                        send_notifications=send_notifications,
                     )
                     source_stats.append(stats)
                     if digest_matches:
@@ -178,6 +193,7 @@ class ScanPipeline:
                     },
                 )
 
+                self.last_run_result = result
                 return result
 
         finally:
@@ -255,7 +271,12 @@ class ScanPipeline:
         result.recompute_aggregates()
 
     def _process_source(
-        self, source_config: SourceConfig, scan_timestamp, run_id: str
+        self,
+        source_config: SourceConfig,
+        scan_timestamp,
+        run_id: str,
+        *,
+        send_notifications: bool = True,
     ) -> Tuple[SourceRunStats, List[CandidateMatch]]:
         """
         Process a single source: fetch, normalize, persist, match, notify.
@@ -264,6 +285,7 @@ class ScanPipeline:
             source_config: Configuration for the source to process
             scan_timestamp: Timestamp to use for this scan run
             run_id: Run ID for context propagation
+            send_notifications: Whether to dispatch notifications for matches
 
         Returns:
             Tuple of SourceRunStats and the matches deferred for the global digest
@@ -417,6 +439,15 @@ class ScanPipeline:
                                 )
                                 continue  # Skip to next job
 
+                            # Match before persisting so Match Explainability is stored
+                            # with the job. Changed jobs, plus unchanged jobs whose
+                            # current version was never alerted (e.g. a prior send
+                            # failed), are candidates for notification below.
+                            match_result = self.keyword_matcher.evaluate(
+                                norm_result.job, norm_result.matchable_text
+                            )
+                            norm_result.job = norm_result.job.apply_match_result(match_result)
+
                             # Persist based on normalization result
                             if norm_result.should_upsert:
                                 job_repo.upsert(norm_result.job)
@@ -427,15 +458,11 @@ class ScanPipeline:
                                 else:
                                     updated_count += 1
                             else:
-                                # Job unchanged, just update last_seen
-                                job_repo.update_last_seen(norm_result.job.job_key, scan_timestamp)
+                                # Job unchanged: refresh last_seen and match metadata
+                                job_repo.update_last_seen_and_match(
+                                    norm_result.job, scan_timestamp
+                                )
                                 unchanged_count += 1
-
-                            # Match changed jobs, plus unchanged jobs whose current
-                            # version was never alerted (e.g. a prior send failed).
-                            match_result = self.keyword_matcher.evaluate(
-                                norm_result.job, norm_result.matchable_text
-                            )
 
                             if match_result.is_match:
                                 is_retry = (
@@ -455,7 +482,7 @@ class ScanPipeline:
                                         is_retry=is_retry,
                                     )
 
-                                    if candidate.should_notify:
+                                    if send_notifications and candidate.should_notify:
                                         matches_to_notify.append(candidate)
 
                         except Exception as e:

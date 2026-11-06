@@ -9,9 +9,17 @@ This module defines the data structures used throughout the application:
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
+
+
+class TriageStatus(str, Enum):
+    """User triage workflow state for a stored job."""
+
+    NEW = "new"
+    SAVED = "saved"
+    APPLIED = "applied"
 
 
 class RawJob(BaseModel):
@@ -117,6 +125,79 @@ class Job(BaseModel):
     )
     is_remote: Optional[bool] = Field(None, description="Explicit remote flag from ATS")
     location_country: Optional[str] = Field(None, description="Primary location country")
+    is_match: Optional[bool] = Field(
+        default=None, description="Whether job matched any active Search Profile (None = not yet scored)"
+    )
+    primary_profile: Optional[str] = Field(default=None, description="Winning Search Profile name")
+    matched_profiles: List[str] = Field(
+        default_factory=list, description="All matching Search Profile names by score desc"
+    )
+    affinity_score: float = Field(default=0.0, description="Weighted affinity score of primary profile")
+    score_breakdown: Dict[str, float] = Field(
+        default_factory=dict, description="Per-term points contributing to affinity_score"
+    )
+    match_snippets: List[str] = Field(
+        default_factory=list, description="Description excerpts with matched keywords"
+    )
+    matched_fields: Dict[str, List[str]] = Field(
+        default_factory=dict, description="Field name to sorted list of matched terms"
+    )
+    user_status: TriageStatus = Field(default=TriageStatus.NEW, description="User triage workflow state")
+
+    @field_validator("matched_fields", mode="before")
+    @classmethod
+    def normalize_matched_fields(cls, val: Any) -> Any:
+        """Coerce set/sequence values to sorted lists so JSON encoding never fails."""
+        if val is None:
+            return {}
+        if isinstance(val, dict):
+            return {k: sorted(list(v)) for k, v in val.items() if v}
+        return val
+
+    @field_validator("user_status", mode="before")
+    @classmethod
+    def default_user_status(cls, val: Any) -> Any:
+        """Treat NULL (legacy rows) as the 'new' triage status."""
+        return TriageStatus.NEW if val is None else val
+
+    @field_validator("matched_profiles", "match_snippets", mode="before")
+    @classmethod
+    def default_empty_list(cls, val: Any) -> Any:
+        """Treat NULL columns as empty lists."""
+        return [] if val is None else val
+
+    @field_validator("score_breakdown", mode="before")
+    @classmethod
+    def default_empty_dict(cls, val: Any) -> Any:
+        """Treat NULL columns as empty dicts."""
+        return {} if val is None else val
+
+    @field_validator("affinity_score", mode="before")
+    @classmethod
+    def default_affinity_score(cls, val: Any) -> Any:
+        """Treat NULL (legacy rows) as a zero score."""
+        return 0.0 if val is None else val
+
+    def apply_match_result(self, match_result: Any) -> "Job":
+        """Return a copy of this job carrying the explainability from a MatchResult.
+
+        ``user_status`` and all other fields are left untouched.
+        """
+        return self.model_copy(update=self._match_fields(match_result))
+
+    @staticmethod
+    def _match_fields(match_result: Any) -> Dict[str, Any]:
+        return {
+            "is_match": bool(match_result.is_match),
+            "primary_profile": match_result.primary_profile,
+            "matched_profiles": list(match_result.matched_profiles),
+            "affinity_score": float(match_result.affinity_score),
+            "score_breakdown": dict(match_result.score_breakdown),
+            "match_snippets": list(match_result.snippets),
+            "matched_fields": {
+                k: sorted(list(v)) for k, v in match_result.matched_fields.items() if v
+            },
+        }
 
     @field_validator("source_type")
     @classmethod
