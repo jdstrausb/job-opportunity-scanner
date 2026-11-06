@@ -102,12 +102,15 @@ class CandidateMatch:
         match_result: Output from keyword matching
         should_upsert: Whether to persist the job (new or content changed)
         should_notify: Whether to send a notification (is_match and no exclusions)
+        is_retry: True when the job is unchanged but its current version has no alert
+            record (e.g. a previous digest/SMTP send failed)
     """
 
     normalization_result: NormalizationResult
     match_result: MatchResult
     should_upsert: bool = True
     should_notify: bool = False
+    is_retry: bool = False  # Unchanged job whose current version was never alerted
 
     def __post_init__(self):
         """Compute derived fields after initialization."""
@@ -131,3 +134,8 @@ class CandidateMatch:
     def content_changed(self) -> bool:
         """Convenience accessor for whether content changed."""
         return self.normalization_result.content_changed
+
+    @property
+    def needs_alert(self) -> bool:
+        """Whether this candidate is eligible for an alert (changed, or retry of a lost alert)."""
+        return self.content_changed or self.is_retry

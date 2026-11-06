@@ -237,9 +237,9 @@ class ScanPipeline:
             return
 
         if digest_result.status == "sent":
-            # The service only sends candidates whose content changed; mirror that here.
+            # The service only sends candidates that need an alert; mirror that here.
             for stats, candidates in candidates_by_source:
-                sent = sum(1 for c in candidates if c.content_changed)
+                sent = sum(1 for c in candidates if c.needs_alert)
                 stats.notified_count += sent
                 stats.alerts_sent += sent
             logger.info(
@@ -438,19 +438,28 @@ class ScanPipeline:
                                 job_repo.update_last_seen(norm_result.job.job_key, scan_timestamp)
                                 unchanged_count += 1
 
-                            # Match jobs that need re-evaluation
-                            if norm_result.should_re_match:
-                                match_result = self.keyword_matcher.evaluate(
-                                    norm_result.job, norm_result.matchable_text
+                            # Match changed jobs, plus unchanged jobs whose current
+                            # version was never alerted (e.g. a prior send failed).
+                            match_result = self.keyword_matcher.evaluate(
+                                norm_result.job, norm_result.matchable_text
+                            )
+
+                            if match_result.is_match:
+                                is_retry = (
+                                    not norm_result.should_re_match
+                                    and not alert_repo.has_been_sent(
+                                        norm_result.job.job_key, norm_result.job.content_hash
+                                    )
                                 )
 
-                                if match_result.is_match:
+                                if norm_result.should_re_match or is_retry:
                                     stats.matched_count += 1
 
                                     # Create candidate match
                                     candidate = CandidateMatch(
                                         normalization_result=norm_result,
                                         match_result=match_result,
+                                        is_retry=is_retry,
                                     )
 
                                     if candidate.should_notify:

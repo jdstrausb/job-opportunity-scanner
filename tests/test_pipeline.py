@@ -636,6 +636,79 @@ class TestScanPipeline:
         with get_session() as session:
             assert len(JobRepository(session).get_by_source("greenhouse", "test1")) == 1
 
+    def test_failed_digest_re_alerts_on_subsequent_run_after_smtp_recovers(
+        self,
+        temp_database,
+        app_config,
+        env_config,
+        mock_notification_service,
+        keyword_matcher,
+        sample_raw_jobs,
+    ):
+        """Matches from a failed digest are re-sent next run, then never again."""
+        from app.persistence.database import get_session
+        from app.persistence.repositories import AlertRepository
+
+        app_config.email.notification_mode = NotificationMode.DIGEST
+        pipeline = ScanPipeline(
+            app_config=app_config,
+            env_config=env_config,
+            notification_service=mock_notification_service,
+            keyword_matcher=keyword_matcher,
+        )
+        adapter_factory = self._per_source_adapter(
+            {"test1": [sample_raw_jobs[0]], "test2": [sample_raw_jobs[1]]}
+        )
+
+        def working_send_digest(candidates, env, email, alert_repo, scan_id):
+            for c in candidates:
+                alert_repo.record_alert(c.job.job_key, c.job.content_hash, utc_now())
+            return NotificationResult(
+                job_key="digest", version_hash="v", attempts=1, status="sent"
+            )
+
+        with patch("app.pipeline.runner.get_adapter") as mock_get_adapter:
+            mock_get_adapter.side_effect = adapter_factory
+
+            # Run 1: SMTP down
+            mock_notification_service.send_digest.return_value = NotificationResult(
+                job_key="digest", version_hash="", attempts=3, status="failed", error="SMTP down"
+            )
+            run1 = pipeline.run_once()
+            assert run1.had_errors
+            with get_session() as session:
+                alert_repo = AlertRepository(session)
+                keys = [
+                    c.job.job_key
+                    for c in mock_notification_service.send_digest.call_args.args[0]
+                ]
+                assert len(keys) == 2
+                assert not any(
+                    alert_repo.has_been_sent(c.job.job_key, c.job.content_hash)
+                    for c in mock_notification_service.send_digest.call_args.args[0]
+                )
+
+            # Run 2: SMTP recovered, jobs unchanged
+            mock_notification_service.send_digest.reset_mock()
+            mock_notification_service.send_digest.side_effect = working_send_digest
+            run2 = pipeline.run_once()
+            assert not run2.had_errors
+            assert mock_notification_service.send_digest.call_count == 1
+            candidates = mock_notification_service.send_digest.call_args.args[0]
+            assert sorted(c.job.job_key for c in candidates) == sorted(keys)
+            assert run2.total_notified == 2
+            with get_session() as session:
+                alert_repo = AlertRepository(session)
+                assert all(
+                    alert_repo.has_been_sent(c.job.job_key, c.job.content_hash)
+                    for c in candidates
+                )
+
+            # Run 3: already alerted, nothing re-sent
+            mock_notification_service.send_digest.reset_mock()
+            pipeline.run_once()
+            mock_notification_service.send_digest.assert_not_called()
+
     def test_run_once_legacy_mode_sends_per_job_notifications(
         self,
         temp_database,

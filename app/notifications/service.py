@@ -105,7 +105,7 @@ class NotificationService:
                     status="skipped",
                 )
 
-            if not candidate.content_changed:
+            if not candidate.needs_alert:
                 self.logger.info(
                     f"Skipping notification for job {job_key} - content unchanged",
                     extra={"event": "notification.skip", "reason": "content_unchanged"}
@@ -375,7 +375,7 @@ class NotificationService:
         notify_candidates = []
         for candidate in matches:
             # Check should_notify and content_changed flags
-            if not candidate.should_notify or not candidate.content_changed:
+            if not candidate.should_notify or not candidate.needs_alert:
                 continue
 
             # Check deduplication
