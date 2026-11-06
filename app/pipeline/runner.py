@@ -10,7 +10,6 @@ from app.adapters.exceptions import AdapterError
 from app.adapters.factory import get_adapter
 from app.config.environment import EnvironmentConfig
 from app.config.models import AppConfig, NotificationMode, SourceConfig
-from app.domain.models import SourceStatus
 from app.filtering import FilterContext, FilteringService
 from app.logging import get_logger
 from app.logging.context import log_context
@@ -314,16 +313,12 @@ class ScanPipeline:
                             },
                         )
 
-                        # Update source health - success
-                        source_status = SourceStatus(
-                            source_identifier=source_config.identifier,
+                        source_repo.record_fetch(
+                            source_config.identifier,
                             name=source_config.name,
                             source_type=source_config.type,
-                            last_success_at=scan_timestamp,
-                            last_error_at=None,
-                            error_message=None,
+                            at=scan_timestamp,
                         )
-                        source_repo.upsert(source_status)
 
                     except AdapterError as e:
                         # Non-fatal adapter error - log and continue
@@ -341,16 +336,14 @@ class ScanPipeline:
                             exc_info=True,
                         )
 
-                        # Update source health - error
-                        source_status = SourceStatus(
-                            source_identifier=source_config.identifier,
+                        # Preserves last_success_at from earlier scans
+                        source_repo.record_fetch(
+                            source_config.identifier,
                             name=source_config.name,
                             source_type=source_config.type,
-                            last_success_at=None,
-                            last_error_at=scan_timestamp,
-                            error_message=str(e),
+                            at=scan_timestamp,
+                            error=str(e),
                         )
-                        source_repo.upsert(source_status)
 
                         # Return early for this source
                         stats.duration_seconds = time.time() - source_start

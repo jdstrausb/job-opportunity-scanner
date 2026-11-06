@@ -303,6 +303,58 @@ class TestScanPipeline:
             assert stats_test2.error_count > 0
             assert "API error" in stats_test2.error_message
 
+    def test_source_health_survives_failed_fetch_and_clears_on_recovery(
+        self,
+        temp_database,
+        app_config,
+        env_config,
+        mock_notification_service,
+        keyword_matcher,
+    ):
+        """An adapter error records the failure without erasing last_success_at."""
+        from app.persistence.database import get_session
+        from app.persistence.repositories import SourceRepository
+
+        pipeline = ScanPipeline(
+            app_config=app_config,
+            env_config=env_config,
+            notification_service=mock_notification_service,
+            keyword_matcher=keyword_matcher,
+        )
+
+        def health(identifier):
+            with get_session() as session:
+                return SourceRepository(session).get_by_identifier(identifier)
+
+        with patch("app.pipeline.runner.get_adapter") as mock_get_adapter:
+            ok_adapter = Mock()
+            ok_adapter.fetch_jobs.return_value = []
+            failing_adapter = Mock()
+            failing_adapter.fetch_jobs.side_effect = AdapterHTTPError(
+                "API error", url="http://test.com", status_code=500
+            )
+
+            mock_get_adapter.return_value = ok_adapter
+            pipeline.run_once()
+            first_success = health("test1").last_success_at
+            assert first_success is not None
+
+            mock_get_adapter.return_value = failing_adapter
+            pipeline.run_once()
+            after_failure = health("test1")
+            assert after_failure.last_success_at == first_success
+            assert after_failure.last_error_at is not None
+            assert "API error" in after_failure.error_message
+            assert after_failure.name == "Test Source 1"
+            assert after_failure.source_type == "greenhouse"
+
+            mock_get_adapter.return_value = ok_adapter
+            pipeline.run_once()
+            recovered = health("test1")
+            assert recovered.last_success_at > first_success
+            assert recovered.last_error_at is None
+            assert recovered.error_message is None
+
     def test_run_once_prevents_concurrent_runs(
         self,
         temp_database,

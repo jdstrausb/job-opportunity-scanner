@@ -636,8 +636,8 @@ class TestSourceRepository:
         assert persisted_source.name == "Updated Name"
         assert persisted_source.error_message == "Some error"
 
-    def test_update_success_clears_error_state(self):
-        """Test update_success clears error state."""
+    def test_record_fetch_success_clears_error_state(self):
+        """A successful fetch sets last_success_at and clears the previous error."""
         source = create_test_source()
         source.error_message = "Previous error"
 
@@ -649,17 +649,23 @@ class TestSourceRepository:
 
         with get_session() as session:
             repo = SourceRepository(session)
-            repo.update_success(source.source_identifier, timestamp)
+            repo.record_fetch(
+                source.source_identifier,
+                name=source.name,
+                source_type=source.source_type,
+                at=timestamp,
+            )
 
         with get_session() as session:
             repo = SourceRepository(session)
             found_source = repo.get_by_identifier(source.source_identifier)
 
-        assert found_source.last_success_at is not None
+        assert found_source.last_success_at == timestamp
+        assert found_source.last_error_at is None
         assert found_source.error_message is None
 
-    def test_update_error_preserves_last_success(self):
-        """Test update_error preserves last_success_at."""
+    def test_record_fetch_error_preserves_last_success(self):
+        """A failed fetch records the error and keeps last_success_at."""
         source = create_test_source()
         success_time = datetime(2025, 11, 1, 10, 0, 0, tzinfo=timezone.utc)
         source.last_success_at = success_time
@@ -672,14 +678,36 @@ class TestSourceRepository:
 
         with get_session() as session:
             repo = SourceRepository(session)
-            repo.update_error(source.source_identifier, error_time, "Test error")
+            repo.record_fetch(
+                source.source_identifier,
+                name=source.name,
+                source_type=source.source_type,
+                at=error_time,
+                error="Test error",
+            )
 
         with get_session() as session:
             repo = SourceRepository(session)
             found_source = repo.get_by_identifier(source.source_identifier)
 
-        assert found_source.last_success_at is not None
+        assert found_source.last_success_at == success_time
+        assert found_source.last_error_at == error_time
         assert found_source.error_message == "Test error"
+
+    def test_record_fetch_creates_missing_source(self):
+        """record_fetch creates the health row on a source's first fetch."""
+        at = datetime(2025, 11, 3, 9, 0, 0, tzinfo=timezone.utc)
+
+        with get_session() as session:
+            created = SourceRepository(session).record_fetch(
+                "newcorp", name="New Corp", source_type="ashby", at=at, error="boom"
+            )
+
+        assert created.name == "New Corp"
+        assert created.source_type == "ashby"
+        assert created.last_success_at is None
+        assert created.last_error_at == at
+        assert created.error_message == "boom"
 
 
 class TestAlertRepository:

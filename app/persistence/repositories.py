@@ -295,85 +295,59 @@ class SourceRepository:
             )
             raise PersistenceError(f"Failed to upsert source: {e}") from e
 
-    def update_success(self, source_identifier: str, timestamp: datetime) -> None:
-        """Update last_success_at after successful scan.
+    def record_fetch(
+        self,
+        source_identifier: str,
+        *,
+        name: str,
+        source_type: str,
+        at: datetime,
+        error: Optional[str] = None,
+    ) -> SourceStatus:
+        """Record the outcome of one fetch attempt for a source.
 
-        Clears last_error_at and error_message. Creates source if doesn't exist.
+        A success sets ``last_success_at`` and clears any previous error. A failure
+        sets ``last_error_at`` and ``error_message`` and leaves ``last_success_at``
+        untouched, so the last known-good scan time survives outages. ``name`` and
+        ``source_type`` are refreshed on every call. Creates the row if missing.
 
         Args:
             source_identifier: Company identifier in the ATS
-            timestamp: Success timestamp (UTC)
+            name: Human-readable source name
+            source_type: ATS type (greenhouse, lever, ashby, rss, serpapi_google)
+            at: When the fetch completed (UTC)
+            error: Error description if the fetch failed, None on success
+
+        Returns:
+            The source's health record after this outcome
 
         Raises:
             PersistenceError: If database error occurs
         """
         try:
-            existing = self.session.get(SourceStatusModel, source_identifier)
+            model = self.session.get(SourceStatusModel, source_identifier)
+            if model is None:
+                model = SourceStatusModel(source_identifier=source_identifier)
+                self.session.add(model)
 
-            if existing:
-                # Update existing source
-                existing.last_success_at = timestamp
-                existing.last_error_at = None
-                existing.error_message = None
-                self.session.flush()
+            model.name = name
+            model.source_type = source_type
+            if error is None:
+                model.last_success_at = at
+                model.last_error_at = None
+                model.error_message = None
             else:
-                # Create new source with minimal data
-                source_status = SourceStatus(
-                    source_identifier=source_identifier,
-                    name=source_identifier,  # Use identifier as name if not known
-                    source_type="unknown",  # Placeholder
-                    last_success_at=timestamp,
-                    last_error_at=None,
-                    error_message=None,
-                )
-                self.upsert(source_status)
+                model.last_error_at = at
+                model.error_message = error
+
+            self.session.flush()
+            return model.to_domain()
 
         except SQLAlchemyError as e:
             logger.error(
-                f"Error updating success for source {source_identifier}: {e}", exc_info=True
+                f"Error recording fetch for source {source_identifier}: {e}", exc_info=True
             )
-            raise PersistenceError(f"Failed to update source success: {e}") from e
-
-    def update_error(
-        self, source_identifier: str, timestamp: datetime, error_message: str
-    ) -> None:
-        """Update last_error_at and error_message after failure.
-
-        Keeps last_success_at unchanged. Creates source if doesn't exist.
-
-        Args:
-            source_identifier: Company identifier in the ATS
-            timestamp: Error timestamp (UTC)
-            error_message: Error description
-
-        Raises:
-            PersistenceError: If database error occurs
-        """
-        try:
-            existing = self.session.get(SourceStatusModel, source_identifier)
-
-            if existing:
-                # Update existing source
-                existing.last_error_at = timestamp
-                existing.error_message = error_message
-                self.session.flush()
-            else:
-                # Create new source with minimal data
-                source_status = SourceStatus(
-                    source_identifier=source_identifier,
-                    name=source_identifier,  # Use identifier as name if not known
-                    source_type="unknown",  # Placeholder
-                    last_success_at=None,
-                    last_error_at=timestamp,
-                    error_message=error_message,
-                )
-                self.upsert(source_status)
-
-        except SQLAlchemyError as e:
-            logger.error(
-                f"Error updating error for source {source_identifier}: {e}", exc_info=True
-            )
-            raise PersistenceError(f"Failed to update source error: {e}") from e
+            raise PersistenceError(f"Failed to record source fetch: {e}") from e
 
 
 class AlertRepository:
