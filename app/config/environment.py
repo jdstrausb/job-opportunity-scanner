@@ -90,13 +90,9 @@ def load_environment_config() -> EnvironmentConfig:
         try:
             smtp_port = int(smtp_port_str)
             if smtp_port < 1 or smtp_port > 65535:
-                errors.append(
-                    f"Invalid SMTP_PORT: {smtp_port}. Must be between 1 and 65535."
-                )
+                errors.append(f"Invalid SMTP_PORT: {smtp_port}. Must be between 1 and 65535.")
         except ValueError:
-            errors.append(
-                f"Invalid SMTP_PORT: '{smtp_port_str}'. Must be a valid integer."
-            )
+            errors.append(f"Invalid SMTP_PORT: '{smtp_port_str}'. Must be a valid integer.")
 
     # Validate email address format
     if alert_to_email:
@@ -104,9 +100,7 @@ def load_environment_config() -> EnvironmentConfig:
         email_addresses = [email.strip() for email in alert_to_email.split(",")]
         for email in email_addresses:
             if not _is_valid_email(email):
-                errors.append(
-                    f"Invalid email address format in ALERT_TO_EMAIL: '{email}'"
-                )
+                errors.append(f"Invalid email address format in ALERT_TO_EMAIL: '{email}'")
 
     # Validate log level if provided
     if log_level:
@@ -118,13 +112,9 @@ def load_environment_config() -> EnvironmentConfig:
 
     # Validate SMTP authentication consistency
     if smtp_user and not smtp_pass:
-        errors.append(
-            "SMTP_USER is set but SMTP_PASS is not. Both must be set for authentication."
-        )
+        errors.append("SMTP_USER is set but SMTP_PASS is not. Both must be set for authentication.")
     elif smtp_pass and not smtp_user:
-        errors.append(
-            "SMTP_PASS is set but SMTP_USER is not. Both must be set for authentication."
-        )
+        errors.append("SMTP_PASS is set but SMTP_USER is not. Both must be set for authentication.")
 
     # If there are validation errors, raise exception
     if errors:

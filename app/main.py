@@ -279,7 +279,7 @@ def main() -> int:
 
         # Step 4: Instantiate shared service singletons
         notification_service = NotificationService()
-        keyword_matcher = KeywordMatcher(app_config.search_criteria)
+        keyword_matcher = KeywordMatcher(app_config.get_effective_profiles())
 
         logger.info(
             "Services initialized",

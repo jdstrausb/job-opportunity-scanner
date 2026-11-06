@@ -199,6 +199,9 @@
             <div class="job-item">
                 <div class="job-title">
                     <a href="{{ job.url }}" target="_blank">{{ job.title }}</a>
+                    {% if job.primary_profile is defined and job.primary_profile and job.primary_profile != 'default' %}
+                    <span style="background-color: #e0f2fe; color: #0369a1; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-left: 6px;">{{ job.primary_profile }} ({{ job.affinity_score }})</span>
+                    {% endif %}
                 </div>
 
                 <div class="job-meta">

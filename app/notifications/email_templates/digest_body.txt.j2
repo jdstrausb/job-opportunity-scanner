@@ -17,6 +17,7 @@ Summary: {{ total_matches }} match{{ 'es' if total_matches != 1 else '' }} from 
   Location: {{ job.location }}
   {% if job.posted_at %}Posted: {{ job.posted_at[:10] }}{% endif %}
   Match: {{ job.match_quality | upper }}
+  {% if job.primary_profile is defined and job.primary_profile and job.primary_profile != 'default' %}Track: {{ job.primary_profile }} (Score: {{ job.affinity_score }}){% endif %}
   {% if job.match_summary %}Reason: {{ job.match_summary }}{% endif %}
   {% if job.matched_terms %}Terms: {{ job.matched_terms | join(', ') }}{% endif %}
   Apply: {{ job.url }}

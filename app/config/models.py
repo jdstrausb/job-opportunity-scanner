@@ -524,7 +524,8 @@ class AppConfig(BaseModel):
         description="Advanced runtime settings"
     )
     filtering: FilteringRules = Field(
-        default_factory=FilteringRules, description="Job filtering rules"
+        default_factory=FilteringRules,  # type: ignore[arg-type]
+        description="Job filtering rules",
     )
 
     # Computed field
